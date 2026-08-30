@@ -1,0 +1,54 @@
+{
+  "Self_Learning_Basic": {
+    "enable_message_capture": true,
+    "enable_auto_learning": false,
+    "enable_realtime_learning": false,
+    "enable_jargon_learning": false,
+    "enable_style_learning": false,
+    "enable_realtime_llm_filter": false,
+    "enable_web_interface": false,
+    "web_interface_port": 0,
+    "web_interface_host": "127.0.0.1"
+  },
+  "Target_Settings": {
+    "target_qq_list": [],
+    "target_blacklist": [],
+    "current_persona_name": ""
+  },
+  "Model_Configuration": {
+    "filter_provider_id": null,
+    "refine_provider_id": null,
+    "reinforce_provider_id": null
+  },
+  "Storage_Settings": {
+    "data_dir": "./data/plugin_data/astrbot_plugin_self_learning"
+  },
+  "Database_Settings": {
+    "db_type": "sqlite",
+    "mysql_host": "",
+    "mysql_port": 3306,
+    "mysql_user": "",
+    "mysql_password": "",
+    "mysql_database": "",
+    "postgresql_host": "",
+    "postgresql_port": 5432,
+    "postgresql_user": "",
+    "postgresql_password": "",
+    "postgresql_database": "",
+    "postgresql_schema": "",
+    "max_connections": 5,
+    "min_connections": 1
+  },
+  "API_Settings": {
+    "api_key": "",
+    "enable_api_auth": true
+  },
+  "Integration_Settings": {
+    "delegate_memory_to_livingmemory": true,
+    "livingmemory_plugin_name": "astrbot_plugin_livingmemory",
+    "disable_local_memory_when_delegated": true,
+    "delegate_reply_to_group_chat_plus": false,
+    "group_chat_plus_plugin_name": "",
+    "disable_local_reply_when_delegated": false
+  }
+}

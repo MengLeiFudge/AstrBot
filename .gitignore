@@ -20,7 +20,13 @@ cookies.json
 # Data files
 data_v2.db
 data_v3.db
-data
+# Runtime data is local; only the three maintained plugin source trees are tracked.
+data/*
+!data/plugins/
+data/plugins/*
+!data/plugins/astrbot_plugin_local_artifact_api/
+!data/plugins/astrbot_plugin_qqbot_features/
+!data/plugins/astrbot_plugin_topic_concentration/
 configs/session
 configs/config.yaml
 cmd_config.json

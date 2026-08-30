@@ -1,0 +1,6 @@
+name: astrbot_plugin_qqbot_features
+display_name: 棉花糖功能合集
+desc: "AstrBot 群务、菜单、生图、JM 漫画 PDF、游戏、本地表情包、源码知识、姐妹互动、回复风格守卫和运行时错误拦截。"
+version: v0.15.2
+author: MengLei
+repo: ""

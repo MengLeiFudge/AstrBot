@@ -1,0 +1,6 @@
+name: astrbot_plugin_topic_concentration
+display_name: 棉花糖群聊激活
+desc: "控制云栖群聊激活、命名呼叫、普通候选和拍一拍状态机。"
+version: v0.6.0
+author: MengLei
+repo: ""

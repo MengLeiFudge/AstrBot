@@ -1,0 +1,4 @@
+# Pinned dependencies imported by repository-managed AstrBot plugins.
+jmcomic==2.7.2
+img2pdf==0.6.3
+pikepdf==10.11.0

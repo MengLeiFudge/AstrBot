@@ -1,0 +1,1 @@
+"""Lolicon image feature."""

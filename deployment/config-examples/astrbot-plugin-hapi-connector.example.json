@@ -1,0 +1,20 @@
+{
+  "hapi_endpoint": "",
+  "access_token": "",
+  "proxy_url": "",
+  "cf_access_client_id": "",
+  "cf_access_client_secret": "",
+  "max_reconnect_attempts": 5,
+  "jwt_lifetime": 3600,
+  "refresh_before_expiry": 300,
+  "output_level": "summary",
+  "summary_msg_count": 20,
+  "quick_prefix": "",
+  "poke_approve": false,
+  "remind_pending": false,
+  "remind_interval": 60,
+  "auto_approve_enabled": false,
+  "auto_approve_start": "00:00",
+  "auto_approve_end": "00:00",
+  "default_notification_window": ""
+}

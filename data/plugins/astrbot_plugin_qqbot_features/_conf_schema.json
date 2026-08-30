@@ -1,0 +1,435 @@
+{
+  "auto_approve_friend_requests": {
+    "description": "自动同意好友申请",
+    "type": "bool",
+    "default": true,
+    "hint": "收到 OneBot friend request 后调用 set_friend_add_request。"
+  },
+  "auto_approve_group_invites": {
+    "description": "自动同意邀请入群",
+    "type": "bool",
+    "default": true,
+    "hint": "只处理 request_type=group 且 sub_type=invite 的邀请入群事件，不处理普通加群申请。"
+  },
+  "data_root": {
+    "description": "RightCodes 生图积分存储根目录",
+    "type": "string",
+    "default": "",
+    "hint": "留空时自动使用 data/plugin_data/qqbot_features_runtime。"
+  },
+  "api_key": {
+    "description": "RightCodes API Key",
+    "type": "string",
+    "default": "",
+    "hint": "直接填写 RightCodes 生图 API Key；示例导出会脱敏，不读取旧 .env 或 QQBOT_AI_KEY_RIGHTCODES。"
+  },
+  "point_multiplier": {
+    "description": "RightCodes 生图积分倍率",
+    "type": "int",
+    "default": 1000,
+    "hint": "模型美元价格 x 倍率后向上取整。"
+  },
+  "draw_timeout_seconds": {
+    "description": "RightCodes 生图总超时秒数",
+    "type": "int",
+    "default": 240,
+    "hint": "生图通常超过 1 分钟；超过该时间仍未返回时，插件回复失败并退回本次扣除的积分。"
+  },
+  "jmcomic_enabled": {
+    "description": "启用 JM 下载转 PDF",
+    "type": "bool",
+    "default": true,
+    "hint": "任何好友可在群聊或私聊发送 JM作品ID；文件和密码只通过私聊发送。"
+  },
+  "jmcomic_proxy": {
+    "description": "JM 下载代理",
+    "type": "string",
+    "default": "",
+    "hint": "可选 HTTP/HTTPS 代理地址。留空时显式禁用系统代理继承，不保存 cookie。"
+  },
+  "jmcomic_timeout_seconds": {
+    "description": "JM 下载总超时秒数",
+    "type": "int",
+    "default": 1800,
+    "hint": "单个作品下载和图片整理的总超时，范围 60-7200 秒。"
+  },
+  "jmcomic_max_pages_per_pdf": {
+    "description": "单个 JM PDF 最大页数",
+    "type": "int",
+    "default": 500,
+    "hint": "整本超过该页数时按章节分卷；单章仍超限时继续按页拆分，范围 10-1000。"
+  },
+  "jmcomic_max_pdf_size_mb": {
+    "description": "单个 JM PDF 最大 MiB",
+    "type": "int",
+    "default": 100,
+    "hint": "整本超过该大小时删除整本并按章节分卷；单章仍超限时继续拆分，范围 10-500 MiB。"
+  },
+  "jmcomic_max_concurrent_jobs": {
+    "description": "JM 下载最大并发任务数",
+    "type": "int",
+    "default": 2,
+    "hint": "不同作品并发下载数量，范围 1-2；相同作品自动合并为一个任务。"
+  },
+  "jmcomic_max_queued_jobs": {
+    "description": "JM 下载最大排队任务数",
+    "type": "int",
+    "default": 50,
+    "hint": "并发槽占满后的 FIFO 队列上限，范围 1-100；同一 QQ 可以连续提交多个不同作品。"
+  },
+  "jmcomic_cache_max_gb": {
+    "description": "JM PDF 缓存上限 GiB",
+    "type": "int",
+    "default": 10,
+    "hint": "持久保存未加密标准 PDF，超限按最后访问时间清理，范围 1-100 GiB。"
+  },
+  "sub2api_base_url": {
+    "description": "Sub2API 管理端地址",
+    "type": "string",
+    "default": "",
+    "hint": "填写 Sub2API 根地址，例如 https://ai.example.com；不要带 /admin/accounts。"
+  },
+  "sub2api_admin_api_key": {
+    "description": "Sub2API Admin API Key",
+    "type": "string",
+    "default": "",
+    "hint": "填写 Sub2API 设置页生成的 admin- 开头 API Key；只保存在运行态配置，不要写入源码或示例配置。"
+  },
+  "sub2api_timeout_seconds": {
+    "description": "Sub2API 查询超时秒数",
+    "type": "int",
+    "default": 90,
+    "hint": "账号额度后台会使用 source=active&force=true 主动刷新，用户榜与账号刷新错开半个周期；Cloudflare 前置站点或主动刷新较慢时建议不低于 90 秒。"
+  },
+  "sub2api_refresh_interval_seconds": {
+    "description": "Sub2API 后台刷新间隔秒数",
+    "type": "int",
+    "default": 300,
+    "hint": "插件启动后后台定时使用 source=active&force=true 刷新全部账号，并独立刷新 CodexRadar 智力效率公开数据；群里发送 用量 时只返回最近一次缓存图片，不等待刷新请求。"
+  },
+  "sub2api_alert_group_ids": {
+    "description": "Sub2API 用量提醒目标群号",
+    "type": "string",
+    "default": "",
+    "hint": "英文逗号分隔一个或多个 QQ 群号。5h 用量首次跨过 80%、90%、95% 时自动提醒；回落到阈值以下后才会再次触发同一阈值。"
+  },
+  "reply_style_guard_long_reply_fold_threshold_chars": {
+    "description": "长回复折叠阈值",
+    "type": "int",
+    "default": 300,
+    "hint": "群聊 LLM 纯文本回复超过该字符数时，插件会先改写为 AstrBot Nodes 合并转发消息链，再交回 AstrBot 发送链路；填 0 表示禁用。此阈值独立于 Core forward_threshold，用于更早折叠水群长回复。"
+  },
+  "reply_style_guard_disable_astrbot_segmented_reply": {
+    "description": "禁用 AstrBot 原生 LLM 正则分段",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，插件会把普通 LLM 结果改为 GENERAL_RESULT，故意架空 WebUI 的 platform_settings.segmented_reply 对 LLM 结果的句末正则分段，避免解释类回答被拆成多条刷屏。关闭后恢复 AstrBot 原生分段设置。"
+  },
+  "reply_style_guard_long_input_tldr_threshold_chars": {
+    "description": "群聊长输入太长不看阈值",
+    "type": "int",
+    "default": 300,
+    "hint": "仅限制群聊。群聊中直接 @ 或唤醒当前 bot，正文非空白字符数超过该值时，本地短回太长不看，不进入 LLM；私聊不限制；固定命令、生图、群管、下载等副作用入口不走该短路。填 0 表示禁用。"
+  },
+  "reply_style_guard_long_input_tldr_text": {
+    "description": "群聊长输入短回复",
+    "type": "string",
+    "default": "太长不看喵",
+    "hint": "触发长输入太长不看阈值时发送的固定短回复。"
+  },
+  "temp_dedupe_enabled": {
+    "description": "AstrBot temp 重复文件去重",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后插件后台只删除 data/temp 中超过安全窗口的重复文件；容量和过期清理由 AstrBot Core 的 temp_dir_max_size 继续负责。"
+  },
+  "temp_dedupe_interval_seconds": {
+    "description": "temp 去重间隔秒数",
+    "type": "int",
+    "default": 21600,
+    "hint": "后台重复文件清理间隔。默认 6 小时；插件启动后会先执行一次。"
+  },
+  "temp_dedupe_min_file_age_seconds": {
+    "description": "temp 去重安全窗口秒数",
+    "type": "int",
+    "default": 600,
+    "hint": "小于该年龄的文件不参与重复删除，避免和正在生成或发送的图片竞争。"
+  },
+  "temp_dedupe_max_files_per_run": {
+    "description": "temp 去重单次扫描上限",
+    "type": "int",
+    "default": 5000,
+    "hint": "限制单次后台去重最多处理的候选文件数，避免 temp 文件过多时长时间占用磁盘 IO。"
+  },
+  "meme_manager_webui_port": {
+    "description": "表情管理后台端口",
+    "type": "int",
+    "default": 5000,
+    "hint": "私聊发送 表情管理 开启管理后台 时使用。独立 meme_manager 插件已移除，本配置归入棉花糖功能合集。"
+  },
+  "meme_manager_prompt": {
+    "description": "表情标签提示词片段",
+    "type": "object",
+    "items": {
+      "prompt_head": {
+        "description": "提示词头",
+        "type": "string",
+        "default": "表情规则：轻松日常、玩梗、吐槽、撒娇、短情绪回复应优先使用 1 个 &&标签&&；当只需要表达态度、情绪或敷衍短应答时，可以只输出 1 个 &&标签&& 作为纯表情回复，不要再配文字；只有从下列标签中选择，不能编造标签。"
+      },
+      "prompt_tail_1": {
+        "description": "提示词尾 1",
+        "type": "string",
+        "default": "严肃、技术、报错、安全、群管理、长解释场景不要用表情；普通问答如需要解释，可以文字后带 1 个表情；短情绪闲聊优先纯表情。不要空行；回复仍需短。最多 "
+      },
+      "prompt_tail_2": {
+        "description": "提示词尾 2",
+        "type": "string",
+        "default": " 个。"
+      }
+    }
+  },
+  "meme_manager_enable_mixed_message": {
+    "description": "启用表情图文混合发送",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，文本和表情图片可混在同一条消息链；关闭后表情图片在文本发送后单独补发。"
+  },
+  "meme_manager_mixed_message_probability": {
+    "description": "表情图文混合概率",
+    "type": "int",
+    "default": 80,
+    "hint": "启用表情图文混合时的混合概率，范围 0-100。",
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 10
+    }
+  },
+  "meme_manager_emotions_probability": {
+    "description": "自动附表情概率",
+    "type": "int",
+    "default": 100,
+    "hint": "LLM 选择到表情标签后实际发送图片的概率，范围 0-100。",
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 10
+    }
+  },
+  "meme_manager_max_emotions_per_message": {
+    "description": "单次回复最多表情数",
+    "type": "int",
+    "default": 1,
+    "hint": "本地 selector 最多从 LLM 输出标签中选择多少张表情图。"
+  },
+  "meme_manager_strict_max_emotions_per_message": {
+    "description": "严格限制表情数量",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后超过上限的表情标签会被裁剪。"
+  },
+  "meme_manager_convert_static_to_gif": {
+    "description": "静态图转 GIF 发送",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，发送静态图片表情时会临时转换为 1 帧 GIF。"
+  },
+  "meme_manager_enable_alternative_markup": {
+    "description": "识别备用表情标记",
+    "type": "bool",
+    "default": true,
+    "hint": "识别 [标签]、(标签) 等备用标记，并在发送前清理。"
+  },
+  "meme_manager_remove_invalid_alternative_markup": {
+    "description": "移除无效备用标记",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后会移除无法识别的括号或方括号标记内容；如误删普通括号文本请关闭。"
+  },
+  "meme_manager_enable_repeated_emotion_detection": {
+    "description": "识别重复表情标签",
+    "type": "bool",
+    "default": true,
+    "hint": "识别 happyhappyhappy 这类重复标签，避免半截/畸形标签进入群聊。"
+  },
+  "meme_manager_enable_loose_emotion_matching": {
+    "description": "启用宽松表情匹配",
+    "type": "bool",
+    "default": true,
+    "hint": "允许在中文上下文中宽松识别表情标签；如果英文误判较多可关闭。"
+  },
+  "meme_manager_high_confidence_emotions": {
+    "description": "高置信度表情标签",
+    "type": "list",
+    "default": [
+      "affection_kiss",
+      "agreement_yes",
+      "angry_dislike",
+      "apology_sorry",
+      "awkward_silence",
+      "boss_feed",
+      "boss_worship",
+      "confused_question",
+      "cute_begging_trade",
+      "fear_panic",
+      "food_eat",
+      "funny_laugh",
+      "game_invite",
+      "happy_cheer",
+      "hug_comfort",
+      "no_need",
+      "polite_awkward_smile",
+      "reject_no",
+      "rhythm_game_pressure",
+      "sad_cry",
+      "self_noob",
+      "shocked_surprise",
+      "shy_flirt",
+      "slap_warning",
+      "sleep_rest",
+      "tired_defeated",
+      "touch_rua",
+      "troll_funny",
+      "watching_observe",
+      "work_progress"
+    ],
+    "hint": "这些标签重复两次即可被识别，适合本地常用标签。"
+  },
+  "meme_manager_content_cleanup_rule": {
+    "description": "表情标签清理正则",
+    "type": "string",
+    "default": "&&[a-zA-Z0-9_\\-]+&&",
+    "hint": "发送前额外清理残留标签的正则表达式。"
+  },
+  "meme_manager_emotion_llm_enabled": {
+    "description": "启用独立情感模型选表情",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭。开启后会额外调用当前会话或指定 provider 判断表情标签；普通发送链路仍不在插件内切换主回复模型。"
+  },
+  "meme_manager_emotion_llm_provider_id": {
+    "description": "情感模型 Provider ID",
+    "type": "string",
+    "default": "",
+    "hint": "留空时使用当前会话 provider；仅在 meme_manager_emotion_llm_enabled=true 时生效。",
+    "_special": "select_provider"
+  },
+  "meme_manager_image_host": {
+    "description": "表情图床类型",
+    "type": "string",
+    "default": "stardots",
+    "options": [
+      "stardots",
+      "cloudflare_r2"
+    ],
+    "hint": "只影响 表情管理 同步到云端 / 从云端同步 等图床命令；不配置密钥时不会初始化图床同步。"
+  },
+  "meme_manager_streaming_compatibility": {
+    "description": "流式传输兼容",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，流式模式下表情图片会在流式消息完成后作为独立消息发送。"
+  },
+  "meme_manager_image_host_config": {
+    "description": "表情图床配置",
+    "type": "object",
+    "items": {
+      "stardots": {
+        "description": "Stardots 图床配置",
+        "type": "object",
+        "items": {
+          "key": {
+            "description": "API Key",
+            "type": "string",
+            "hint": "请输入 Stardots 的 API Key。"
+          },
+          "secret": {
+            "description": "API Secret",
+            "type": "string",
+            "hint": "请输入 Stardots 的 API Secret。"
+          },
+          "space": {
+            "description": "空间名称",
+            "type": "string",
+            "default": "memes",
+            "hint": "请输入 Stardots 的空间名称。"
+          }
+        }
+      },
+      "cloudflare_r2": {
+        "description": "Cloudflare R2 图床配置",
+        "type": "object",
+        "items": {
+          "account_id": {
+            "description": "Cloudflare Account ID",
+            "type": "string",
+            "hint": "请输入 Cloudflare Account ID。"
+          },
+          "access_key_id": {
+            "description": "R2 Access Key ID",
+            "type": "string",
+            "hint": "请输入 R2 Access Key ID。"
+          },
+          "secret_access_key": {
+            "description": "R2 Secret Access Key",
+            "type": "string",
+            "hint": "请输入 R2 Secret Access Key。"
+          },
+          "bucket_name": {
+            "description": "R2 Bucket 名称",
+            "type": "string",
+            "hint": "请输入 R2 Bucket 名称。"
+          },
+          "public_url": {
+            "description": "自定义 CDN 域名",
+            "type": "string",
+            "default": "",
+            "hint": "可选，例如 https://cdn.example.com。"
+          }
+        }
+      }
+    }
+  },
+  "source_knowledge_enabled_groups": {
+    "description": "源码知识注入群号",
+    "type": "string",
+    "default": "",
+    "hint": "英文逗号分隔群号；留空表示按问题领域自动决定是否注入源码证据。"
+  },
+  "source_knowledge_source_roots": {
+    "description": "源码知识根目录",
+    "type": "text",
+    "default": "",
+    "hint": "每行或分号分隔 domain=path；留空使用内置 DSP、FE、MLJ_DSPmods 辅助模组/工具、星环、创世、shapez、Factorio 源码根。"
+  },
+  "source_knowledge_max_results": {
+    "description": "源码知识最大结果数",
+    "type": "int",
+    "default": 4,
+    "hint": "每轮 LLM 请求最多注入多少条源码检索结果；需要深查时再临时调高，避免普通聊天 prompt 过肥。"
+  },
+  "source_knowledge_max_chars": {
+    "description": "源码知识最大字符数",
+    "type": "int",
+    "default": 2600,
+    "hint": "限制源码证据注入长度；默认按低成本运行，复杂技术追查可在运行态配置中临时调高。"
+  },
+  "source_knowledge_max_files_per_domain": {
+    "description": "源码知识每领域最大扫描文件数",
+    "type": "int",
+    "default": 80,
+    "hint": "rg 不可用时的 Python 扫描上限；rg 可用时优先使用 rg。"
+  },
+  "source_knowledge_max_file_bytes": {
+    "description": "源码知识单文件最大字节数",
+    "type": "int",
+    "default": 220000,
+    "hint": "超过该大小的单个源码文件不读取；复杂源码问答需要覆盖大文件时再临时调高。"
+  },
+  "source_knowledge_refresh_seconds": {
+    "description": "源码知识索引刷新秒数",
+    "type": "int",
+    "default": 600,
+    "hint": "Python fallback 索引缓存刷新间隔。"
+  }
+}
