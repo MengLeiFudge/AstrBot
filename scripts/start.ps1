@@ -126,6 +126,7 @@ $process = Start-Process `
     -FilePath $uv.Source `
     -ArgumentList @("run", "--no-sync", "python", "main.py") `
     -WorkingDirectory $ProjectRoot `
+    -WindowStyle Hidden `
     -RedirectStandardOutput $StdoutLog `
     -RedirectStandardError $StderrLog `
     -PassThru
