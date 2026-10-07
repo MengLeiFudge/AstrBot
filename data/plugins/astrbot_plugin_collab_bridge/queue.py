@@ -61,9 +61,9 @@ class Queue:
         return count
 
     def enqueue(self, group: str, message: str, sender: str, body: str) -> bool:
-        """Persist one explicit demand, rejecting capacity overflow before acknowledgement."""
+        """Persist direct text mentioning the bot; reject overflow before changing the queue."""
         if not body.strip() or len(body.encode()) > 8192:
-            raise ValueError("Demand must contain 1–8192 UTF-8 bytes")
+            raise ValueError("Text must contain 1–8192 UTF-8 bytes")
         if not group.isdecimal() or not sender.isdecimal() or not message or len(message) > 128:
             raise ValueError("Invalid source identifiers")
         with self.db:
@@ -71,7 +71,7 @@ class Queue:
                 return False
             used, count = self.db.execute("SELECT coalesce(sum(length(CAST(body AS BLOB))),0),count(*) FROM items WHERE body IS NOT NULL").fetchone()
             if used + len(body.encode()) > self.max_bytes or count >= 10000:
-                raise ValueError("Demand queue is full; this demand was not accepted")
+                raise ValueError("Raw text queue is full; this message was not accepted")
             self.db.execute("INSERT INTO items VALUES(?,?,?,?,?,NULL)", (group, message, sender, int(time.time() * 1000), body))
         return True
 
@@ -104,7 +104,7 @@ class Queue:
         return True
 
     def save_summary(self, batch_id: str, summary: str):
-        """Persist the generated text before attempting HTTP delivery."""
+        """Persist generated text or the fixed empty marker before any delivery or completion."""
         if not summary.strip() or len(summary.encode()) > 8192:
             raise ValueError("Summary is empty or exceeds 8192 UTF-8 bytes")
         with self.db:
@@ -115,6 +115,11 @@ class Queue:
         with self.db:
             self.db.execute("UPDATE batches SET state='delivered' WHERE id=?", (batch_id,))
             self.db.execute("UPDATE items SET body=NULL WHERE batch_id=?", (batch_id,))
+
+    def finish_empty(self, batch_id: str):
+        """Finish an empty summary locally; keep raw text until normal seven-day expiry."""
+        with self.db:
+            self.db.execute("UPDATE batches SET state='empty' WHERE id=? AND state='pending'", (batch_id,))
 
     def mark_sent(self, outbox_id: str):
         """Remember a successful QQ send before acknowledging it to the bridge."""
