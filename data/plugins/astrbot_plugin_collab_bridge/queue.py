@@ -36,6 +36,7 @@ class Queue:
                 CREATE TABLE IF NOT EXISTS budget (day TEXT PRIMARY KEY,attempts INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS sent (id TEXT PRIMARY KEY);
                 CREATE TABLE IF NOT EXISTS replies (id TEXT PRIMARY KEY,payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS summary_requests (batch_id TEXT PRIMARY KEY);
             """)
             with self.db:
                 old = self.db.execute("SELECT value FROM settings WHERE key='binding'").fetchone()
@@ -58,6 +59,7 @@ class Queue:
             count = self.db.execute("UPDATE items SET body=NULL WHERE body IS NOT NULL AND received_at<=?", (cutoff,)).rowcount
             # Dedupe identifiers can outlive raw text but should not grow without bound locally.
             self.db.execute("DELETE FROM items WHERE body IS NULL AND received_at<?", (cutoff - RETENTION_MS,))
+            self.db.execute("DELETE FROM summary_requests WHERE batch_id IN (SELECT id FROM batches WHERE state<>'pending')")
         return count
 
     def enqueue(self, group: str, message: str, sender: str, body: str) -> bool:
@@ -75,18 +77,48 @@ class Queue:
             self.db.execute("INSERT INTO items VALUES(?,?,?,?,?,NULL)", (group, message, sender, int(time.time() * 1000), body))
         return True
 
+    def _freeze(self, group: str) -> str:
+        """Freeze at most fifty current source rows inside the caller's transaction."""
+        batch_id = str(uuid.uuid4())
+        self.db.execute("INSERT INTO batches(id,group_id) VALUES(?,?)", (batch_id, group))
+        self.db.execute("UPDATE items SET batch_id=? WHERE group_id=? AND message_id IN (SELECT message_id FROM items WHERE group_id=? AND batch_id IS NULL AND body IS NOT NULL ORDER BY received_at,message_id LIMIT 50)", (batch_id, group, group))
+        return batch_id
+
+    def budget_available(self, limit: int) -> bool:
+        """Read the UTC daily budget without reserving another model attempt."""
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        row = self.db.execute("SELECT attempts FROM budget WHERE day=?", (day,)).fetchone()
+        return not row or row[0] < limit
+
+    def request_summary(self, group: str | None, limit: int) -> str:
+        """Freeze the owner's current group/all-group backlog without bypassing budget or retry delays."""
+        self.expire()
+        with self.db:
+            groups = self.db.execute("SELECT group_id FROM items WHERE batch_id IS NULL AND body IS NOT NULL AND (? IS NULL OR group_id=?) UNION SELECT group_id FROM batches WHERE state='pending' AND (? IS NULL OR group_id=?)", (group, group, group, group)).fetchall()
+            if not groups:
+                return "empty"
+            if not self.budget_available(limit):
+                return "limited"
+            for row in groups:
+                while self.db.execute("SELECT 1 FROM items WHERE group_id=? AND batch_id IS NULL AND body IS NOT NULL LIMIT 1", (row[0],)).fetchone():
+                    self._freeze(row[0])
+                self.db.execute("INSERT OR IGNORE INTO summary_requests SELECT id FROM batches WHERE group_id=? AND state='pending'", (row[0],))
+        return "queued"
+
+    def requested_ready(self, limit: int) -> bool:
+        """Continue requested batches promptly only when their retry delay and model budget allow it."""
+        return self.db.execute("SELECT 1 FROM batches b JOIN summary_requests r ON r.batch_id=b.id WHERE b.state='pending' AND (b.summary IS NOT NULL OR (b.attempted_at<=? AND ?)) LIMIT 1", (int(time.time() * 1000) - 1800000, self.budget_available(limit))).fetchone() is not None
+
     def next_batch(self, threshold: int, delay_ms: int) -> dict | None:
         """Freeze one group at a time; keep its UUID and source set across retries."""
         now = int(time.time() * 1000)
         with self.db:
-            row = self.db.execute("SELECT * FROM batches WHERE state='pending' AND (summary IS NOT NULL OR attempted_at<=?) ORDER BY attempted_at,id LIMIT 1", (now - 1800000,)).fetchone()
+            row = self.db.execute("SELECT * FROM batches WHERE state='pending' AND (summary IS NOT NULL OR attempted_at<=?) ORDER BY (summary IS NOT NULL) DESC,(id IN (SELECT batch_id FROM summary_requests)) DESC,attempted_at,id LIMIT 1", (now - 1800000,)).fetchone()
             if not row:
                 group = self.db.execute("SELECT group_id FROM items WHERE batch_id IS NULL AND body IS NOT NULL GROUP BY group_id HAVING count(*)>=? OR min(received_at)<=? ORDER BY min(received_at) LIMIT 1", (threshold, now - delay_ms)).fetchone()
                 if not group:
                     return None
-                batch_id = str(uuid.uuid4())
-                self.db.execute("INSERT INTO batches(id,group_id) VALUES(?,?)", (batch_id, group[0]))
-                self.db.execute("UPDATE items SET batch_id=? WHERE group_id=? AND message_id IN (SELECT message_id FROM items WHERE group_id=? AND batch_id IS NULL AND body IS NOT NULL ORDER BY received_at,message_id LIMIT 50)", (batch_id, group[0], group[0]))
+                batch_id = self._freeze(group[0])
                 row = self.db.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
             batch = dict(row)
             batch["items"] = [dict(item) for item in self.db.execute("SELECT message_id,sender_id,received_at,body FROM items WHERE batch_id=? ORDER BY received_at,message_id", (batch["id"],))]

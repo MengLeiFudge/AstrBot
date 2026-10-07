@@ -37,6 +37,7 @@ class CollabBridge(Star):
         self.queue: Queue | None = None
         self.client: aiohttp.ClientSession | None = None
         self.worker: asyncio.Task | None = None
+        self.wake = asyncio.Event()
         self.last_error = ""
         self.delivery_ready = False
         self.binding: dict = {}
@@ -57,7 +58,7 @@ class CollabBridge(Star):
             raise ValueError("Bridge token must be random base64url with at least 32 characters")
         self.port = int(self.config.get("port", 19191))
         self.threshold = int(self.config.get("batch_size", 10))
-        self.delay_ms = int(self.config.get("batch_minutes", 30)) * 60000
+        self.delay_ms = int(self.config.get("batch_minutes", 3)) * 60000
         self.daily_limit = int(self.config.get("daily_attempts", 24))
         max_bytes = int(self.config.get("max_raw_bytes", 16 * 1024 * 1024))
         if not (1024 <= self.port <= 65535 and 1 <= self.threshold <= 50 and 60000 <= self.delay_ms <= 86400000 and 1 <= self.daily_limit <= 1000 and 65536 <= max_bytes <= 256 * 1024 * 1024):
@@ -160,6 +161,8 @@ class CollabBridge(Star):
                     logger.info("CollabBridge resumed delivery")
                 self.delivery_ready = True
                 self.last_error = ""
+                if self.queue.requested_ready(self.daily_limit):
+                    self.wake.set()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -169,7 +172,11 @@ class CollabBridge(Star):
                     logger.warning("CollabBridge paused delivery: %s", error)
                 self.delivery_ready = False
                 self.last_error = error
-            await asyncio.sleep(15)
+            try:
+                await asyncio.wait_for(self.wake.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                pass
+            self.wake.clear()
 
     async def send(self, target: str, body: str, private: bool):
         """Send only to the bound adapter using AstrBot's public proactive API."""
@@ -182,21 +189,36 @@ class CollabBridge(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=sys.maxsize - 1)
     async def collect(self, event: AstrMessageEvent):
-        """Copy mentioned group text without consuming it; intercept private confirmations only."""
+        """Collect group text alongside chat; handle owner summary commands and private decisions separately."""
         if not self.ready or event.get_platform_id() != self.binding["platform_id"] or event.get_self_id() != BOT_ID or event.get_sender_id() == BOT_ID:
             return
         components = event.get_messages()
         plain = "".join(part.text for part in components if isinstance(part, Plain)).strip()
         private = event.is_private_chat()
-        collect = not private and bool(plain) and any(isinstance(part, At) and str(part.qq) == BOT_ID for part in components)
-        confirmation = private and plain.startswith("确认 ") and all(isinstance(part, (At, Plain)) for part in components)
-        if not collect and not confirmation:
+        mentioned = any(isinstance(part, At) and str(part.qq) == BOT_ID for part in components)
+        collect = not private and bool(plain) and mentioned
+        direct = all(isinstance(part, (At, Plain)) for part in components)
+        immediate = event.get_sender_id() == OWNER_ID and plain == "汇总" and (private or mentioned) and direct
+        confirmation = private and plain.startswith("确认 ") and direct
+        if not collect and not confirmation and not immediate:
             return
-        if confirmation:
+        if confirmation or immediate:
             event.should_call_llm(False)
             event.stop_event()
         assert self.queue is not None
         try:
+            if immediate:
+                status = self.queue.request_summary(None if private else event.get_group_id(), self.daily_limit)
+                if status == "queued":
+                    self.wake.set()
+                elif status == "empty" and private:
+                    yield event.plain_result("没有待汇总的消息")
+                elif status == "limited":
+                    if private:
+                        yield event.plain_result("今日汇总次数已用完")
+                    else:
+                        await self.send(OWNER_ID, "今日汇总次数已用完", private=True)
+                return
             message_id = str(event.message_obj.message_id)
             if not message_id or message_id == "None":
                 raise ValueError("Missing platform message ID")
@@ -218,5 +240,7 @@ class CollabBridge(Star):
             yield event.plain_result("确认已排队，等待 Pi 核验；尚不表示执行完成。")
         except Exception as exc:
             logger.warning("CollabBridge could not persist input: %s", type(exc).__name__)
-            if confirmation:
+            if immediate and private:
+                yield event.plain_result("汇总请求未保存，请稍后重试。")
+            elif confirmation:
                 yield event.plain_result("协作确认失败：内容过长、队列已满或存储不可用；本条未确认收取。")
