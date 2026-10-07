@@ -1,0 +1,6 @@
+name: astrbot_plugin_collab_bridge
+display_name: Pi 协作桥接
+desc: "显式群需求自动攒批、主人私聊确认与一句结论回群；只连接本机 Pi。"
+version: v0.1.0
+author: MengLei
+repo: ""

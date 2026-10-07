@@ -1,0 +1,14 @@
+{
+  "bridge_id": {"type": "string", "description": "Pi 配置中的桥接 UUID", "default": ""},
+  "database_id": {"type": "string", "description": "collab 数据库 UUID", "default": ""},
+  "generation": {"type": "string", "description": "collab 当前世代 UUID；恢复后需重新绑定", "default": ""},
+  "task_id": {"type": "string", "description": "接收群需求的唯一房间 UUID", "default": ""},
+  "platform_id": {"type": "string", "description": "云栖 OneBot 平台实例 ID", "default": ""},
+  "token": {"type": "string", "description": "与 Pi 相同的随机 base64url token；至少32位，勿公开", "default": "", "obvious_hint": true},
+  "port": {"type": "int", "description": "127.0.0.1 桥接端口", "default": 19191},
+  "provider_id": {"type": "string", "description": "只用于一次性无工具汇总的 provider ID", "default": "deepseek-responses/deepseek-flash"},
+  "batch_size": {"type": "int", "description": "每群达到此条数后汇总，1–50", "default": 10},
+  "batch_minutes": {"type": "int", "description": "每群最早待发需求等待分钟数，1–1440", "default": 30},
+  "daily_attempts": {"type": "int", "description": "机器人每天UTC模型尝试总数，失败也计费，1–1000", "default": 24},
+  "max_raw_bytes": {"type": "int", "description": "本地未发需求原文总字节上限；默认16MiB", "default": 16777216}
+}
