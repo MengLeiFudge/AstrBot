@@ -1,0 +1,6 @@
+name: astrbot_plugin_dsp_knowledge
+display_name: DSP 共享向量知识库
+desc: "为云栖和夜凛维护同一套 DSP 大型模组向量知识库，并提供仅本机可访问的检索接口。"
+version: v0.1.0
+author: MengLei
+repo: ""

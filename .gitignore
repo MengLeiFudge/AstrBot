@@ -20,10 +20,11 @@ cookies.json
 # Data files
 data_v2.db
 data_v3.db
-# Runtime data is local; only the three maintained plugin source trees are tracked.
+# Runtime data is local; only the four maintained plugin source trees are tracked.
 data/*
 !data/plugins/
 data/plugins/*
+!data/plugins/astrbot_plugin_dsp_knowledge/
 !data/plugins/astrbot_plugin_local_artifact_api/
 !data/plugins/astrbot_plugin_qqbot_features/
 !data/plugins/astrbot_plugin_topic_concentration/

@@ -1,0 +1,46 @@
+{
+  "source_root": {
+    "description": "DSP 源码根目录",
+    "type": "string",
+    "default": "D:/project/dsp",
+    "hint": "只读取内置清单中的分馏、创世、星环、更多巨构、深空来敌和伊甸园正式源码与数据。"
+  },
+  "knowledge_base_name": {
+    "description": "共享知识库名称",
+    "type": "string",
+    "default": "dsp-major-mods",
+    "hint": "该知识库由插件独占维护，不要在 WebUI 中手动上传其它文档。"
+  },
+  "embedding_provider_id": {
+    "description": "Embedding Provider ID",
+    "type": "string",
+    "default": "openai_embedding"
+  },
+  "rerank_provider_id": {
+    "description": "Rerank Provider ID",
+    "type": "string",
+    "default": "bailian_rerank"
+  },
+  "sync_interval_seconds": {
+    "description": "增量同步间隔（秒）",
+    "type": "int",
+    "default": 600,
+    "hint": "每轮先比较稳定分片哈希；无变化时不会请求 embedding。"
+  },
+  "api_port": {
+    "description": "本机共享检索端口",
+    "type": "int",
+    "default": 8081,
+    "hint": "固定绑定 127.0.0.1，供夜凛 qqbot_knowledge 调用。"
+  },
+  "max_results": {
+    "description": "最终证据条数",
+    "type": "int",
+    "default": 4
+  },
+  "max_evidence_chars": {
+    "description": "注入证据最大字符数",
+    "type": "int",
+    "default": 6000
+  }
+}

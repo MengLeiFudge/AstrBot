@@ -1,0 +1,10 @@
+{
+  "source_root": "D:/project/dsp",
+  "knowledge_base_name": "dsp-major-mods",
+  "embedding_provider_id": "openai_embedding",
+  "rerank_provider_id": "bailian_rerank",
+  "sync_interval_seconds": 600,
+  "api_port": 8081,
+  "max_results": 4,
+  "max_evidence_chars": 6000
+}

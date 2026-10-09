@@ -406,7 +406,7 @@
     "description": "源码知识根目录",
     "type": "text",
     "default": "",
-    "hint": "每行或分号分隔 domain=path；留空使用内置 DSP、FE、MLJ_DSPmods 辅助模组/工具、星环、创世、shapez、Factorio 源码根。"
+    "hint": "每行或分号分隔 domain=path；留空使用内置 shapez、Factorio 源码根。"
   },
   "source_knowledge_max_results": {
     "description": "源码知识最大结果数",

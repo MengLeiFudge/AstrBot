@@ -177,13 +177,11 @@
   - 获取 Factorio Space Age Windows 安装包下载链接。
   - 需要本机配置 Factorio 凭据。
 
-## 源码知识兜底
+## 源码与向量知识
 
-- LLM 请求前按当前问题检索只读源码树，临时注入少量证据片段；不依赖 AstrBot 原生知识库或 Embedding。
-- 默认领域覆盖 DSPCore、万物分馏、MLJ_DSPmods 辅助模组/工具、星环、创世之书、shapez 和 Factorio。
-- `dsp-mod-tools` 辅助模组/工具域默认覆盖 SaveDataExporter、UXAEnhance、AfterBuildEvent、GetDspData、VanillaCurveSim 和 UXAssist。
-- 群号只作为默认领域偏置；当问题包含精确模组名、工具名、目录名或机制词时，会跨默认群域检索对应源码根。
-- 源码知识默认按低成本注入：`source_knowledge_max_results=4`、`source_knowledge_max_chars=2600`、`source_knowledge_max_files_per_domain=80`、`source_knowledge_max_file_bytes=220000`；复杂技术追查需要大文件证据时，再在运行态配置里临时调高。
+- 本插件的旧关键词检索只继续覆盖 shapez 和 Factorio，在 LLM 请求前临时注入少量可信源码片段。
+- DSP 六个大型模组由独立的 `astrbot_plugin_dsp_knowledge` 维护唯一 `dsp-major-mods` 向量库，使用 Qwen embedding、AstrBot 混合召回和 `qwen3-rerank`；本插件不再检索 DSP 源码。
+- shapez / Factorio 本地检索默认按低成本注入：`source_knowledge_max_results=4`、`source_knowledge_max_chars=2600`、`source_knowledge_max_files_per_domain=80`、`source_knowledge_max_file_bytes=220000`；复杂技术追查需要大文件证据时，再在运行态配置里临时调高。
 
 ## 异形工厂
 

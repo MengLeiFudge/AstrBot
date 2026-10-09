@@ -643,7 +643,7 @@ class QQBotFeaturesPlugin(Star):
             safe_event_value(event, "get_self_id"),
         )
 
-    @filter.on_llm_request(desc="在 LLM 请求前按群号和问题检索本机源码树，把少量可信源码片段临时注入上下文。")
+    @filter.on_llm_request(desc="在 LLM 请求前检索本机 Shapez/Factorio 源码树并注入可信片段。")
     async def inject_source_knowledge(self, event: AstrMessageEvent, req: ProviderRequest):
         group_id = str(event.get_group_id() or "")
         if self._source_knowledge_config.enabled_groups and group_id not in self._source_knowledge_config.enabled_groups:
@@ -652,7 +652,11 @@ class QQBotFeaturesPlugin(Star):
         query = request_context.combined_query or request_context.current_text
         if not query:
             return
-        domains = resolve_domains(group_id, query)
+        domains = tuple(
+            domain
+            for domain in resolve_domains(group_id, query)
+            if domain in {"shapez", "factorio"}
+        )
         if not domains:
             return
         results = self._source_knowledge_index.search(query, domains)

@@ -10,7 +10,7 @@ python3 scripts/qqbot-maintenance/export-astrbot-config-examples.py
 
 导出内容包括 `cmd_config.example.json`、`personas.example.json` 和 `plugins/*.example.json`。脚本会剔除 LLM provider/model/provider_sources/provider_settings/fallback/image-caption/embedding 路由，并脱敏 key、token、secret、password、cookie、authorization 等字段。
 
-真实 AstrBot 运行数据位于本项目的 `data/`，由项目 `.gitignore` 排除；只有三个本地插件源码纳入版本控制。常见敏感项包括：
+真实 AstrBot 运行数据位于本项目的 `data/`，由项目 `.gitignore` 排除；只有四个本地插件源码纳入版本控制。常见敏感项包括：
 
 - Dashboard 密码、JWT secret、TOTP secret。
 - Provider API key。
@@ -21,3 +21,5 @@ python3 scripts/qqbot-maintenance/export-astrbot-config-examples.py
 初始化新机器时，先启动 AstrBot 生成默认配置，再参考本目录的示例补充本机值。
 
 云栖人格文本从 AstrBot WebUI 人格配置导出为 `personas.example.json`。夜凛、星遥和月澄只在云栖人格中作为静态姐妹关系，不配置为 AstrBot persona 或平台。
+
+DSP 六个大型模组的唯一向量库由 `astrbot_plugin_dsp_knowledge` 从 `D:/project/dsp` 自动增量维护。新机器还需配置 `openai_embedding`（`qwen3.7-text-embedding`）与 `bailian_rerank`（`qwen3-rerank`）两个 provider；API key 只放真实运行配置。插件只在 `127.0.0.1:8081` 提供共享检索，夜凛不会保存第二份索引。
