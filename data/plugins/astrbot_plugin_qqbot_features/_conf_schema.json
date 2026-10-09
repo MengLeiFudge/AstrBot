@@ -12,25 +12,31 @@
     "hint": "只处理 request_type=group 且 sub_type=invite 的邀请入群事件，不处理普通加群申请。"
   },
   "data_root": {
-    "description": "RightCodes 生图积分存储根目录",
+    "description": "生图积分存储根目录",
     "type": "string",
     "default": "",
     "hint": "留空时自动使用 data/plugin_data/qqbot_features_runtime。"
   },
   "api_key": {
-    "description": "RightCodes API Key",
+    "description": "CPA 客户端 API Key",
     "type": "string",
     "default": "",
-    "hint": "直接填写 RightCodes 生图 API Key；示例导出会脱敏，不读取旧 .env 或 QQBOT_AI_KEY_RIGHTCODES。"
+    "hint": "填写本机 CPA 客户端 API Key，渠道优先级由 CPA 管理；示例导出会脱敏。"
+  },
+  "base_url": {
+    "description": "CPA 生图 API 地址",
+    "type": "string",
+    "default": "http://127.0.0.1:8317/v1",
+    "hint": "OpenAI Images 兼容地址，包含 /v1。"
   },
   "point_multiplier": {
-    "description": "RightCodes 生图积分倍率",
+    "description": "生图积分倍率",
     "type": "int",
     "default": 1000,
-    "hint": "模型美元价格 x 倍率后向上取整。"
+    "hint": "模型人民币价格 x 倍率后向上取整；0.04 元 x 1000 = 40 积分。"
   },
   "draw_timeout_seconds": {
-    "description": "RightCodes 生图总超时秒数",
+    "description": "生图总超时秒数",
     "type": "int",
     "default": 240,
     "hint": "生图通常超过 1 分钟；超过该时间仍未返回时，插件回复失败并退回本次扣除的积分。"

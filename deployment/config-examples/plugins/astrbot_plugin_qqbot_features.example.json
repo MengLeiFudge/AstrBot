@@ -3,6 +3,7 @@
   "auto_approve_group_invites": true,
   "data_root": "",
   "api_key": "",
+  "base_url": "http://127.0.0.1:8317/v1",
   "point_multiplier": 1000,
   "draw_timeout_seconds": 240,
   "jmcomic_enabled": true,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 import json
 import os
@@ -33,7 +34,11 @@ from .comic_pdf import ComicPdfService
 from .comic_pdf import is_onebot_friend
 from .comic_pdf import load_comic_pdf_config
 from .comic_pdf import send_private_pdfs_with_password
+from .draw_input import STANDARD_DRAW_PREFIX, doudouyan_command_parts, prepare_explicit_draw_request, preload_draw_references
+from .draw_output import save_generated_image
+from .draw_intent import DRAW_INTENT_SYSTEM, DrawIntentRouter, component_text
 from .image_summary import prepare_onebot_image_summary_chain
+from .image_summary import choose_image_summary
 from .image_summary import random_summary_image_from_file
 from .image_summary import random_summary_image_from_url
 from .llm_error_guard import LLM_ERROR_NOTICE_COOLDOWN_SECONDS
@@ -53,6 +58,7 @@ from .onebot_api import OneBotCallApiAdapter
 from .rightcodes_draw_logic import RightCodesDrawClient
 from .rightcodes_draw_logic import RightCodesDrawQuotaStore
 from .rightcodes_draw_logic import RightCodesDrawRequest
+from .rightcodes_draw_logic import RightCodesDrawResult
 from .rightcodes_draw_logic import extract_rightcodes_draw_model_switch
 from .rightcodes_draw_logic import extract_removed_rightcodes_draw_temporary_model
 from .rightcodes_draw_logic import format_draw_quota_exceeded_message
@@ -65,7 +71,6 @@ from .rightcodes_draw_logic import format_rightcodes_draw_model_switch_success
 from .rightcodes_draw_logic import format_rightcodes_draw_points_mutation_denied
 from .rightcodes_draw_logic import format_rightcodes_draw_points_ranking
 from .rightcodes_draw_logic import format_rightcodes_draw_points_status
-from .rightcodes_draw_logic import format_rightcodes_draw_suggestion_message
 from .rightcodes_draw_logic import format_rightcodes_draw_success
 from .rightcodes_draw_logic import format_rightcodes_draw_temporary_model_removed
 from .rightcodes_draw_logic import format_rightcodes_draw_timeout
@@ -77,7 +82,6 @@ from .rightcodes_draw_logic import looks_like_rightcodes_draw_model_switch
 from .rightcodes_draw_logic import looks_like_rightcodes_draw_points_mutation_request
 from .rightcodes_draw_logic import looks_like_rightcodes_draw_points_query
 from .rightcodes_draw_logic import looks_like_rightcodes_draw_points_ranking
-from .rightcodes_draw_logic import looks_like_rightcodes_draw_suggestion
 from .rightcodes_draw_logic import parse_rightcodes_draw_command
 from .rightcodes_draw_logic import parse_rightcodes_draw_model_switch
 from .rightcodes_draw_catalog import format_rightcodes_draw_catalog_injection
@@ -305,8 +309,9 @@ FEATURES: tuple[FeatureSpec, ...] = (
         name="RightCodes生图",
         aliases=("生图", "画图", "RightCodes"),
         lines=(
-            "棉花糖生图 提示词：使用当前模型提交 RightCodes 生图任务",
-            "生图模型 / 生图价格：查看模型；切换生图模型 模型名：持久切换",
+            "文生图 提示词 / 图生图 提示词（附图或引用）：40 积分/次",
+            "头像生图 [@某人] 提示词：默认用自己的头像，指定目标须紧跟命令",
+            "生图模型 / 生图价格：查看唯一模型与价格",
             "查看积分 / balance / points：查询积分、当前模型和消耗；积分排行：查看全群前 10",
         ),
     ),
@@ -434,6 +439,7 @@ class QQBotFeaturesPlugin(Star):
         self._temp_duplicate_cleanup_task: asyncio.Task | None = None
         self._sub2api_alerted_thresholds_by_account: dict[str, set[int]] = {}
         self._rightcodes_draw_lock = asyncio.Semaphore(2)
+        self._draw_intent_router = DrawIntentRouter()
         self._group_inviter_by_group_id: dict[str, str] = {}
         reply_style_guard_config = ScopedPluginConfig(
             config,
@@ -1577,26 +1583,67 @@ class QQBotFeaturesPlugin(Star):
             len(source_text),
         )
 
-    @filter.event_message_type(EventMessageType.ALL, desc="RightCodes 生图总入口，处理生图、模型切换、积分查询与排行。")
+    @filter.event_message_type(EventMessageType.ALL, priority=1500, desc="在普通聊天激活前记录本轮是否明确唤醒。")
+    async def capture_draw_intent_wake(self, event: AstrMessageEvent):
+        """Snapshot explicit wake state before group activity can promote candidates.
+
+        Args:
+            event: Current event; this flag never persists beyond its processing.
+        """
+        event.set_extra("qqbot_draw_intent_wake", _is_direct_or_private(event))
+
+    @filter.event_message_type(EventMessageType.ALL, desc="RightCodes 生图总入口，处理明确指令和自然语言生图。")
     async def rightcodes_draw_command(self, event: AstrMessageEvent):
         text = extract_plain_text(event).strip()
         if not text:
             return
-        is_direct_or_private = _is_direct_or_private(event)
-        if not looks_like_rightcodes_draw_feature_request(text, is_direct_or_private=is_direct_or_private):
-            return
-        if looks_like_rightcodes_draw_suggestion(text) and is_direct_or_private:
-            if not _should_handle_migrated_command(
-                event,
-                self._feature_mode,
-                command_type="rightcodes_draw_suggestion",
-            ):
-                return
-            yield event.plain_result(format_rightcodes_draw_suggestion_message())
-            event.stop_event()
-            return
         if not _should_handle_migrated_command(event, self._feature_mode, command_type="rightcodes_draw"):
             return
+        natural_intent = None
+        intent_parts = None
+
+        async def call_image_action(action: str, **params: object) -> object:
+            """Read source facts through the current platform's public OneBot API."""
+            bot = getattr(event, "bot", None)
+            if bot is None:
+                raise ValueError("当前平台无法读取QQ引用图片")
+            return await bot.call_action(action, **params)
+
+        if not looks_like_rightcodes_draw_feature_request(text):
+            if not event.get_extra("qqbot_draw_intent_wake", False):
+                return
+            parts = _raw_event_dict(event).get("message")
+            if not isinstance(parts, list):
+                parts = [segment.toDict() for segment in event.get_messages()]
+
+            async def classify_intent(prompt: str) -> str:
+                """Classify with the selected provider without persisting chat history."""
+                provider = self.context.get_using_provider(event.unified_msg_origin)
+                if provider is None:
+                    raise ValueError("no draw intent provider")
+                logger.info("[QQBotFeatures] draw intent provider=%s model=%s", provider.meta().id, provider.get_model())
+                response = await provider.text_chat(
+                    prompt=prompt, system_prompt=DRAW_INTENT_SYSTEM, contexts=[],
+                    session_id=f"draw_intent:{event.unified_msg_origin}", persist=False,
+                )
+                return response.completion_text
+
+            try:
+                natural_intent = await self._draw_intent_router.resolve(
+                    parts, sender_id=str(event.get_sender_id()), self_id=str(event.get_self_id()),
+                    call_action=call_image_action, classify=classify_intent,
+                )
+            except Exception as exc:
+                logger.warning("[QQBotFeatures] draw intent unavailable: error_type=%s", type(exc).__name__)
+                return
+            if natural_intent is None or natural_intent.action == "none":
+                return
+            if natural_intent.action == "clarify":
+                yield event.plain_result(f"{natural_intent.clarification} 本次没有扣积分。")
+                event.stop_event()
+                return
+            intent_parts = natural_intent.command_parts()
+            text = component_text(intent_parts)
         await self._cache_group_nickname(event)
         store = RightCodesDrawQuotaStore(
             self._rightcodes_config.data_root,
@@ -1604,7 +1651,8 @@ class QQBotFeaturesPlugin(Star):
         )
         user_id = str(event.get_sender_id() or "")
 
-        if looks_like_rightcodes_draw_points_mutation_request(text):
+        explicit = STANDARD_DRAW_PREFIX.match(text) is not None
+        if not explicit and looks_like_rightcodes_draw_points_mutation_request(text):
             yield event.plain_result(format_rightcodes_draw_points_mutation_denied())
             event.stop_event()
             return
@@ -1660,29 +1708,47 @@ class QQBotFeaturesPlugin(Star):
             model=balance.model,
             image_urls=draw_request.image_urls,
         )
-        request_context = build_current_request_context(event, text)
-        reference_image_urls = extract_image_sources(event)
-        if should_rewrite_rightcodes_draw_prompt(
-            draw_request,
-            reply_texts=request_context.reply_texts,
-            image_urls=reference_image_urls,
-        ):
-            rewritten_request = await self._rewrite_rightcodes_draw_request(
-                event,
-                draw_request,
-                current_text=request_context.current_text,
-                reply_texts=request_context.reply_texts,
-                reference_image_urls=reference_image_urls,
-                unresolved_media_context=request_context.unresolved_media_context,
-            )
-            if rewritten_request is None:
-                if request_context.unresolved_media_context and not reference_image_urls:
-                    yield event.plain_result(format_rightcodes_draw_rewrite_missing_context())
-                else:
-                    yield event.plain_result(format_rightcodes_draw_rewrite_failure())
-                event.stop_event()
-                return
-            draw_request = rewritten_request
+        try:
+            segments = intent_parts if intent_parts is not None else _raw_event_dict(event).get("message")
+            if not isinstance(segments, list):
+                segments = [segment.toDict() for segment in event.get_messages()]
+            preset_parts = await doudouyan_command_parts(segments, call_action=call_image_action)
+            if explicit or preset_parts is not None:
+                draw_request = await prepare_explicit_draw_request(
+                    preset_parts if preset_parts is not None else segments,
+                    sender_id=user_id, model=balance.model, call_action=call_image_action,
+                )
+            else:
+                request_context = build_current_request_context(event, text)
+                reference_image_urls = extract_image_sources(event)
+                if should_rewrite_rightcodes_draw_prompt(
+                    draw_request,
+                    reply_texts=request_context.reply_texts,
+                    image_urls=reference_image_urls,
+                ):
+                    rewritten_request = await self._rewrite_rightcodes_draw_request(
+                        event,
+                        draw_request,
+                        current_text=request_context.current_text,
+                        reply_texts=request_context.reply_texts,
+                        reference_image_urls=reference_image_urls,
+                        unresolved_media_context=request_context.unresolved_media_context,
+                    )
+                    if rewritten_request is None:
+                        if request_context.unresolved_media_context and not reference_image_urls:
+                            yield event.plain_result(format_rightcodes_draw_rewrite_missing_context())
+                        else:
+                            yield event.plain_result(format_rightcodes_draw_rewrite_failure())
+                        event.stop_event()
+                        return
+                    draw_request = rewritten_request
+                draw_request = await preload_draw_references(draw_request)
+        except Exception as exc:
+            logger.warning("[QQBotFeatures] draw input preparation failed: error_type=%s", type(exc).__name__)
+            detail = str(exc) if isinstance(exc, ValueError) else "原图读取失败或超时，请重新附图或引用"
+            yield event.plain_result(f"{detail}。本次没有扣积分。")
+            event.stop_event()
+            return
         quota = await asyncio.to_thread(store.reserve, user_id, model=draw_request.model)
         if not quota.allowed:
             yield event.plain_result(format_draw_quota_exceeded_message(quota))
@@ -1702,11 +1768,26 @@ class QQBotFeaturesPlugin(Star):
             await asyncio.shield(asyncio.to_thread(store.refund, quota))
 
         try:
-            yield event.plain_result(format_draw_start_message(quota))
+            async with asyncio.timeout_at(deadline):
+                start_message = format_draw_start_message(quota)
+                start_message += ("\n提示词来源：豆豆眼预设（完整固定原文）" if preset_parts is not None
+                                  else "\n提示词来源：用户话语（无预设）")
+                if preset_parts is not None:
+                    start_message += "\n本次按固定原文生成，不追加其他描述。"
+                    if natural_intent is not None and natural_intent.source is not None:
+                        start_message += f"\n本次来源：{natural_intent.source.label}"
+                    elif component_text(preset_parts).startswith("头像生图"):
+                        start_message += "\n本次来源：头像生图指定的头像"
+                    else:
+                        target = "当前附图" if any(part.get("type") == "image" for part in preset_parts) else "引用图片"
+                        start_message += f"\n本次来源：{target}"
+                elif natural_intent is not None:
+                    start_message += natural_intent.start_detail()
+                await event.send(event.plain_result(start_message))
             api_key = self._rightcodes_config.api_key
             if not api_key:
                 await refund_once()
-                yield event.plain_result("RightCodes 生图 API Key 还没配置。")
+                yield event.plain_result("CPA 生图 API Key 还没配置。")
                 event.stop_event()
                 return
 
@@ -1716,6 +1797,7 @@ class QQBotFeaturesPlugin(Star):
                         remaining = deadline - asyncio.get_running_loop().time()
                         result = await RightCodesDrawClient(
                             api_key=api_key,
+                            base_url=self._rightcodes_config.base_url,
                             timeout_seconds=remaining,
                         ).draw(draw_request)
                         generated = True
@@ -1740,15 +1822,58 @@ class QQBotFeaturesPlugin(Star):
             await refund_once()
             raise
 
-        message = format_rightcodes_draw_success(result, model=draw_request.model)
-        if result.image_url.startswith(("http://", "https://")):
-            yield _chain_result_with_reply(
-                event,
-                [Plain(message), random_summary_image_from_url(result.image_url)],
-            )
+        try:
+            await self._deliver_draw_result(event, result, draw_request.model, refund_once)
+        finally:
+            event.stop_event()
+
+    async def _deliver_draw_result(
+        self,
+        event: AstrMessageEvent,
+        result: RightCodesDrawResult,
+        model: str,
+        refund: Callable[[], Awaitable[None]],
+    ) -> None:
+        """Save a generated PNG and await delivery so failures remain observable.
+
+        Args:
+            event: Command event with its original reply destination.
+            result: Validated image bytes and generation timing.
+            model: Selected model for the completion message.
+            refund: Request-scoped, at-most-once point refund operation.
+        """
+        saved = None
+        try:
+            saved = await asyncio.to_thread(save_generated_image, result.image_bytes, self._rightcodes_config.data_root)
+        except Exception as exc:
+            logger.error("[QQBotFeatures] draw persistence failed: error_type=%s", type(exc).__name__)
+        message = format_rightcodes_draw_success(result, model=model)
+        if saved is not None:
+            image = random_summary_image_from_file(saved)
         else:
-            yield _chain_result_with_reply(event, [Plain(f"{message}\n{result.image_url}")])
-        event.stop_event()
+            message += "\n图片未保存到本地，已尝试直接交付，请及时保存。"
+            image = Image.fromBytes(result.image_bytes)
+            image.__dict__["summary"] = choose_image_summary()
+        try:
+            async with asyncio.timeout(60):
+                await event.send(_chain_result_with_reply(event, [Plain(message), image]))
+            return
+        except Exception as exc:
+            logger.warning("[QQBotFeatures] draw delivery failed: error_type=%s saved=%s", type(exc).__name__, saved)
+        if saved is None:
+            try:
+                await refund()
+                notice = "图片已生成，但保存和发送均失败，本次积分已退回。"
+            except Exception as exc:
+                logger.error("[QQBotFeatures] draw refund failed: error_type=%s", type(exc).__name__)
+                notice = "图片已生成，但保存和发送均失败；积分退款失败，请联系管理员处理。"
+        else:
+            notice = f"图片已生成并保存，但发送失败。请联系管理员取回：{saved.name}。本次未退积分。"
+        try:
+            async with asyncio.timeout(15):
+                await event.send(event.plain_result(notice))
+        except Exception as exc:
+            logger.warning("[QQBotFeatures] draw failure notice failed: error_type=%s", type(exc).__name__)
 
     async def _rewrite_rightcodes_draw_request(
         self,
