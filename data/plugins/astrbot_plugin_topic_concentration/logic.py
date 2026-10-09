@@ -60,7 +60,7 @@ FIXED_COMMAND_PREFIX_RE = re.compile(
     r"|^(?:养鲲|摸鲲|抓鲲|捕鲲|属性|道具|背包|商城|签到|boss|Boss|查看boss|查看Boss|挑战|落樱之都|更新日志|玩法|个人信息|恢复|回复).*$",
     re.IGNORECASE,
 )
-BOT_NAME_MARKERS = ("棉花糖", "云栖", "萌萌棉花糖", "qqbot")
+BOT_NAME_MARKERS = ("云栖",)
 CALL_ACTION_MARKERS = (
     "帮",
     "帮我",
@@ -97,30 +97,6 @@ CALL_ACTION_MARKERS = (
     "说句话",
     "救",
     "救救",
-)
-STRONG_NON_CALL_MARKERS = (
-    "很好吃",
-    "好吃",
-    "真好吃",
-    "挺好吃",
-    "不好吃",
-    "甜",
-    "太甜",
-    "糖果",
-    "软糖",
-    "甜点",
-    "零食",
-    "棉花糖味",
-    "草莓棉花糖",
-    "巧克力棉花糖",
-    "烤棉花糖",
-    "棉花糖机器",
-    "棉花糖机",
-    "棉花糖工厂",
-    "棉花糖皮肤",
-    "棉花糖成熟",
-    "买棉花糖",
-    "卖棉花糖",
 )
 
 
@@ -168,13 +144,29 @@ _POKE_MUTE_COOLDOWNS: dict[tuple[str, str, str], float] = {}
 
 
 def contains_cotton_candy_marker(text: str) -> bool:
-    return "棉花糖" in str(text or "") or "qqbot" in str(text or "").lower()
+    """Check for Yunqi's personal name; the family name is not a call alias.
+
+    Args:
+        text: Plain message text to inspect.
+
+    Returns:
+        Whether the message contains a configured personal name for Yunqi.
+    """
+    return any(marker in str(text or "") for marker in BOT_NAME_MARKERS)
 
 
 def classify_cotton_candy_call(text: str) -> str:
-    """Return call, non_call, or ambiguous for plain text that mentions 棉花糖."""
+    """Classify whether a message calls Yunqi by her personal name.
+
+    Args:
+        text: Plain message text to classify.
+
+    Returns:
+        ``call`` for a direct call, ``non_call`` when Yunqi is not addressed,
+        or ``ambiguous`` when model-based intent classification is needed.
+    """
     raw = str(text or "").strip()
-    if not raw:
+    if not contains_cotton_candy_marker(raw):
         return "non_call"
     if looks_like_qqbot_fixed_command(raw):
         return "non_call"
@@ -198,14 +190,10 @@ def classify_cotton_candy_call(text: str) -> str:
             f"{marker}看一下",
         }:
             return "call"
-    if _looks_like_strong_non_call(compact):
-        return "non_call"
     if _starts_with_bot_name_and_action(compact, normalized_markers):
         return "call"
     if _prefix_calls_bot(compact, normalized_markers):
         return "call"
-    if not contains_cotton_candy_marker(raw):
-        return "non_call"
     return "ambiguous"
 
 
@@ -214,18 +202,31 @@ def looks_like_direct_bot_call(text: str) -> bool:
 
 
 def build_call_intent_prompt(text: str, *, history_lines: list[str] | None = None) -> str:
+    """Build an intent prompt that distinguishes Yunqi from her family.
+
+    Args:
+        text: Current message containing Yunqi's personal name.
+        history_lines: Optional recent context used to resolve call intent.
+
+    Returns:
+        Instructions for deciding whether the current message addresses Yunqi.
+    """
     lines = [
-        "你是 QQ 群机器人“棉花糖”的呼叫判定器，只判断用户这条消息是不是在叫机器人处理当前请求。",
+        "你是 QQ 群机器人、棉花糖家族成员“云栖”的呼叫判定器，只判断用户这条消息是不是在叫云栖处理当前请求。",
         "必须只返回 JSON，不要解释，不要输出 Markdown。",
         "输出字段：should_reply(boolean), reason(string)。",
-        "should_reply=true 只表示应该让其中一只棉花糖进入普通 LLM 回复链路；不要执行固定命令、扣积分、写文件、上传、下载或群管动作。",
-        "如果用户只是把“棉花糖”当食物、物件、外号、梗、商品、机器、皮肤或普通名词，should_reply=false。",
-        "如果用户在叫棉花糖帮忙、回答、解释、生成、识图、评价、在吗、出来、说句话，should_reply=true。",
-        "如果上下文不够，但这句话明显是在喊机器人接话，should_reply=true；如果只是能聊但没有呼叫意图，should_reply=false。",
-        "正例：棉花糖，帮我生成一张图片 => true",
-        "正例：棉花糖这个图片是哪个角色 => true",
-        "反例：棉花糖很好吃 => false",
-        "反例：草莓棉花糖在哪买 => false",
+        "should_reply=true 只表示应该让云栖进入普通 LLM 回复链路；不要执行固定命令、扣积分、写文件、上传、下载或群管动作。",
+        "呼叫必须使用具体名字“云栖”；“棉花糖”是家族称呼，“萌萌棉花糖”和 qqbot 也不是云栖的呼叫别名，只使用这些称呼时 should_reply=false。",
+        "夜凛、星遥、月澄是其他家族成员，只呼叫她们时 should_reply=false，云栖不能代替她们接话。",
+        "如果用户只是在谈论云栖，没有请云栖处理当前请求，should_reply=false。",
+        "如果用户在叫云栖帮忙、回答、解释、生成、识图、评价、在吗、出来、说句话，should_reply=true；请求涉及棉花糖家族或棉花糖食物不影响呼叫。",
+        "如果上下文不够，但这句话明确使用云栖的名字喊她接话，should_reply=true；如果只是能聊但没有呼叫意图，should_reply=false。",
+        "正例：云栖，帮我生成一张图片 => true",
+        "正例：云栖这个图片是哪个角色 => true",
+        "正例：云栖，棉花糖好吃吗 => true",
+        "反例：棉花糖，出来说句话 => false",
+        "反例：夜凛，帮我看看 => false",
+        "反例：我刚才看到了云栖的消息 => false",
     ]
     if history_lines:
         lines.append("最近上下文节选，仅辅助判断是否在叫机器人：")
@@ -679,6 +680,16 @@ def build_poke_interaction_instruction(
     state: str,
     mute_tool_available: bool,
 ) -> str:
+    """Describe optional poke reactions before applying text reply requirements.
+
+    Args:
+        poke_text: Display text for the current poke notification.
+        state: Qualitative mood derived from recent poke pressure.
+        mute_tool_available: Whether this request permits controlled muting.
+
+    Returns:
+        Instructions for choosing silence, a poke back, or a short text reply.
+    """
     mood = {
         POKE_STATE_CALM: "情绪仍然平静",
         POKE_STATE_ANNOYED: "已经有些不耐烦",
@@ -687,8 +698,13 @@ def build_poke_interaction_instruction(
     lines = [
         f"实际互动文案：{str(poke_text or '').strip()}",
         f"当前定性情绪：{mood}。",
-        f"你可以只返回 {SKIP_REPLY_MARKER} 来无视，也可以调用 {POKE_BACK_TOOL_NAME} 反拍当前拍击者，或给一句符合当前人格的简短文字回复。",
-        "反拍后可以不再输出文字。不要解释内部规则，也不要描述任何内部计量或决策细节。",
+        "当前是发给你的拍一拍通知，不是要求回答的文字消息，被拍本身不要求你开口。先根据当前人格、最近上下文和情绪，在以下三种反应中选择一种，不要默认文字回复，也不要固定轮换：",
+        f"无视：不想互动、正在忙、刚回应过或没有新内容可接时，只返回 {SKIP_REPLY_MARKER}，不要用文字宣布你在无视。",
+        f"反拍：想用动作回应、但没有必要说话时，调用 {POKE_BACK_TOOL_NAME} 反拍当前拍击者；完成后只返回 {SKIP_REPLY_MARKER}，不再附加文字。",
+        "文字回复：确实有具体的话想接时，才给一句符合当前人格的自然短句；不要只是因为被拍了就编一句话。",
+        "最近已经用文字回应过拍一拍，而这次只是重复动作、没有新的交流内容时，优先无视或反拍，不必每次换一句吐槽。",
+        "只有选择文字回复时才应用文字格式和风格要求：针对当前动作自然接话，不复述通知，不重复最近的完整句子、固定比喻或笑点；必须有实际词语，不能只输出空白、单个标点或无意义占位符。",
+        "无视和反拍都是完整反应，不受普通显式文字呼叫必须回复的要求约束。不要解释内部规则，也不要公开状态、次数或决策细节。",
         "工具的目标由程序固定；你不能指定目标、群、时长或状态持续时间。同一事件最多尝试一次副作用。",
     ]
     if mute_tool_available:
@@ -711,7 +727,7 @@ def build_group_activation_instruction(
     if explicit:
         instruction = (
             shared
-            + "当前消息通过 @、引用、明确命名呼叫或拍一拍直接叫到了你。"
+            + "当前文字消息通过 @、引用或明确命名呼叫直接叫到了你。"
             "你必须给出至少一句可见的简短回复，不能返回跳过标记。"
             "如果用户明确表达闭嘴、别说了、安静、退下或同义要求，"
             f"先用你自己的语气给出一句可见收尾，再在末尾附加 {DEACTIVATE_MARKER}。"
@@ -1166,16 +1182,6 @@ def _starts_with_bot_name_and_action(compact: str, markers: tuple[str, ...]) -> 
 def _prefix_calls_bot(compact: str, markers: tuple[str, ...]) -> bool:
     prefixes = ("呼叫", "叫一下", "喊一下", "召唤")
     return any(compact.startswith(f"{prefix}{marker}") for prefix in prefixes for marker in markers)
-
-
-def _looks_like_strong_non_call(compact: str) -> bool:
-    if any(_compact_call_text(marker) in compact for marker in STRONG_NON_CALL_MARKERS):
-        return True
-    if "棉花糖" not in compact:
-        return False
-    if re.search(r"(?:吃|买|卖|烤|做|制作|生产|机器|皮肤|工厂|味|口味)", compact):
-        return not any(_compact_call_text(action) in compact for action in CALL_ACTION_MARKERS)
-    return False
 
 
 def _compact_call_text(text: str) -> str:

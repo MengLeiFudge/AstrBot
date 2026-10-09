@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import time
 from asyncio import CancelledError
+from sys import maxsize
 
 from astrbot.api import logger
 from astrbot.api.event import filter
-from astrbot.api.message_components import At, Plain, Poke, Reply
+from astrbot.api.message_components import At, Image, Plain, Poke, Reply
 from astrbot.api.star import Context, Star, register
 from astrbot.core.agent.message import TextPart
 from astrbot.core.agent.tool import FunctionTool, ToolSet
@@ -55,11 +56,19 @@ from .logic import try_claim_poke_mute
 from .logic import validate_poke_mute_execution
 try:
     from astrbot_plugin_qqbot_features.bot_identity import KNOWN_SISTER_BOT_QQ_IDS
+    from astrbot_plugin_qqbot_features.reply_style_guard_logic import (
+        strip_internal_prompt_echo,
+    )
 except ModuleNotFoundError:  # AstrBot runtime imports plugins as data.plugins.<name>.
     from data.plugins.astrbot_plugin_qqbot_features.bot_identity import KNOWN_SISTER_BOT_QQ_IDS
+    from data.plugins.astrbot_plugin_qqbot_features.reply_style_guard_logic import (
+        strip_internal_prompt_echo,
+    )
 
 
 YUNQI_QQ = "1443944862"
+DEEPSEEK_PROVIDER_ID = "deepseek-responses/deepseek-flash"
+DEEPSEEK_REPLY_PROVIDER_ID = "deepseek-responses/deepseek-flash-reply"
 CURRENT_BOT_ID_EXTRA = "_qqbot_group_activation_bot_id"
 LLM_ROUTE_EXTRA = "_qqbot_group_activation_route"
 ACTIVATION_RENEWALS_EXTRA = "_qqbot_group_activation_renewals"
@@ -108,6 +117,20 @@ class TopicConcentrationPlugin(Star):
             SKIP_REPLY_MARKER,
             DEACTIVATE_MARKER,
         )
+
+    @filter.event_message_type(EventMessageType.ALL, priority=maxsize, desc="在群聊、私聊和拍一拍入口阻止已知机器人互相触发。")
+    async def block_bot_sender(self, event):
+        """Stop known bot chat and poke events before any reply handler runs.
+
+        Args:
+            event: Incoming event whose actual sender identifies the bot account.
+        """
+        if str(event.get_sender_id() or "").strip() not in KNOWN_SISTER_BOT_QQ_IDS:
+            return
+        if _event_post_type(event) not in {"", "message"} and not _current_poke_target_id(event):
+            return
+        event.should_call_llm(False)
+        event.stop_event()
 
     @filter.event_message_type(EventMessageType.ALL, priority=1000, desc="群聊激活状态与云栖普通 LLM 路由；固定命令不参与。")
     async def route_llm_event(self, event):
@@ -203,11 +226,33 @@ class TopicConcentrationPlugin(Star):
                 return
 
         if route == ROUTE_CANDIDATE:
+            if not _plain_text(event).strip() and any(
+                isinstance(comp, Image)
+                or (
+                    isinstance(comp, Reply)
+                    and any(isinstance(part, Image) for part in (comp.chain or []))
+                )
+                for comp in event.get_messages()
+            ):
+                event.should_call_llm(False)
+                event.stop_event()
+                return
             event.set_extra(CANDIDATE_RESERVED_EXTRA, "1")
             event.set_extra(CANDIDATE_QUEUED_AT_EXTRA, time.monotonic())
 
         if route == ROUTE_EXPLICIT and not poke_target_id:
             activation_state = activate_group_chat(event.get_group_id(), self_id)
+
+        if (
+            (route == ROUTE_PRIVATE or (route == ROUTE_EXPLICIT and not poke_target_id))
+            and not event.get_extra("selected_provider")
+            and self.context.get_provider_by_id(DEEPSEEK_REPLY_PROVIDER_ID) is not None
+        ):
+            # Select reasoning for this direct dialogue only; keep the session's
+            # default provider non-thinking for candidates and background work.
+            provider_id = await self.context.get_current_chat_provider_id(event.unified_msg_origin)
+            if provider_id == DEEPSEEK_PROVIDER_ID:
+                event.set_extra("selected_provider", DEEPSEEK_REPLY_PROVIDER_ID)
 
         event.is_wake = True
         event.is_at_or_wake_command = True
@@ -230,6 +275,38 @@ class TopicConcentrationPlugin(Star):
             event.get_group_id(),
         )
 
+    @filter.on_waiting_llm_request(priority=1001, desc="在原生 LLM 请求构造前恢复多个账号的完整 @ 文本。")
+    async def preserve_multi_mention_text(self, event):
+        """Preserve every account mention through the public pre-request hook.
+
+        Args:
+            event: QQ event retaining the adapter's ordered Plain and At components.
+        """
+        if event.get_platform_name() != "aiocqhttp":
+            return
+        components = event.get_messages()
+        mentions = [
+            component for component in components
+            if isinstance(component, At) and str(component.qq) != "all"
+        ]
+        self_id = str(event.get_self_id() or "")
+        if len(mentions) < 2 or not any(str(component.qq) == self_id for component in mentions):
+            return
+
+        parts = []
+        for component in components:
+            if isinstance(component, Plain):
+                parts.append(component.text)
+            elif isinstance(component, At) and str(component.qq) != "all":
+                parts.append(f" @{component.name or ''}({component.qq}) ")
+        restored_text = "".join(parts)
+        previous_text = event.message_str
+        event.message_str = restored_text
+        event.message_obj.message_str = restored_text
+        request = event.get_extra("provider_request")
+        if request is not None and request.prompt == previous_text:
+            request.prompt = restored_text
+
     @filter.on_waiting_llm_request(priority=1000, desc="候选进入 AstrBot 会话锁前检查激活代际与排队时效。")
     async def validate_candidate_before_queue(self, event):
         if str(event.get_extra(LLM_ROUTE_EXTRA, "") or "") != ROUTE_CANDIDATE:
@@ -248,6 +325,12 @@ class TopicConcentrationPlugin(Star):
             event.stop_event()
             return
         route = str(event.get_extra(LLM_ROUTE_EXTRA, "") or "")
+        if route == ROUTE_CANDIDATE:
+            req.image_urls.clear()
+            req.extra_user_content_parts[:] = [
+                part for part in req.extra_user_content_parts
+                if not (isinstance(part, TextPart) and part.text.startswith("[Image Attachment"))
+            ]
         if route == ROUTE_CANDIDATE and not _candidate_request_is_current(event):
             _stop_stale_candidate(event, stage="provider")
             return
@@ -375,6 +458,18 @@ class TopicConcentrationPlugin(Star):
             )
             return
         raw_text = _response_text(response)
+        visible_text = strip_internal_prompt_echo(raw_text)
+        if visible_text != raw_text:
+            _apply_reply_control(response, visible_text, suppress=not visible_text)
+            logger.warning(
+                "[TopicConcentration] stripped internal prompt echo before reply control: "
+                "bot=%s group=%s original_chars=%s visible_chars=%s",
+                selected,
+                event.get_group_id(),
+                len(raw_text),
+                len(visible_text),
+            )
+            raw_text = visible_text
         control = parse_reply_control(raw_text) if route in {ROUTE_EXPLICIT, ROUTE_CANDIDATE} else None
         if route == ROUTE_EXPLICIT and not is_poke and control is not None and not control.cleaned_text:
             retry_response = await retry_explicit_visible_reply(
@@ -402,8 +497,16 @@ class TopicConcentrationPlugin(Star):
         suppress_reply = bool(
             control and control.skip_reply and (route == ROUTE_CANDIDATE or is_poke)
         )
-        if control is not None and (control.skip_reply or control.deactivate):
-            _apply_reply_control(response, control.cleaned_text, suppress=suppress_reply or not control.cleaned_text)
+        if control is not None and (
+            control.skip_reply
+            or control.deactivate
+            or control.cleaned_text != raw_text
+        ):
+            _apply_reply_control(
+                response,
+                control.cleaned_text,
+                suppress=suppress_reply or not control.cleaned_text,
+            )
 
         cleaned_text = _response_text(response)
         visible_reply = bool(cleaned_text)
@@ -459,9 +562,13 @@ class TopicConcentrationPlugin(Star):
             event.get_extra(PENDING_STATE_ACTION_EXTRA, ""),
         )
 
-    @filter.on_agent_done(desc="从即将持久化的 assistant 历史中移除群聊激活内部控制标记。")
-    async def strip_activation_markers_from_history(self, event, run_context, response):
-        if str(event.get_extra(LLM_ROUTE_EXTRA, "") or "") not in {ROUTE_EXPLICIT, ROUTE_CANDIDATE}:
+    @filter.on_agent_done(desc="从即将持久化的 assistant 历史中移除内部控制标记和提示词回显。")
+    async def strip_internal_text_from_history(self, event, run_context, response):
+        if str(event.get_extra(LLM_ROUTE_EXTRA, "") or "") not in {
+            ROUTE_PRIVATE,
+            ROUTE_EXPLICIT,
+            ROUTE_CANDIDATE,
+        }:
             return
         rewrite_last_assistant_history(
             getattr(run_context, "messages", None),
