@@ -6,6 +6,15 @@ import random
 import re
 import time
 
+try:
+    from astrbot_plugin_qqbot_features.reply_style_guard_logic import (
+        strip_internal_prompt_echo,
+    )
+except ModuleNotFoundError:  # AstrBot runtime imports plugins as data.plugins.<name>.
+    from data.plugins.astrbot_plugin_qqbot_features.reply_style_guard_logic import (
+        strip_internal_prompt_echo,
+    )
+
 
 ACTIVATION_WINDOW_SECONDS = 180.0
 CANDIDATE_MAX_WAIT_SECONDS = 30.0
@@ -30,6 +39,7 @@ POKE_STATE_MUTE = "MUTE"
 EXPLICIT_VISIBLE_RETRY_INSTRUCTION = (
     "上一轮没有产生可发送的可见文本。当前消息是用户对你的显式呼叫，"
     "现在必须重新输出至少一句符合你当前人格的简短可见回复，不能只输出任何内部控制标记。"
+    "可见回复必须包含有意义的汉字、字母或数字，不能只发句号、问号、空白、颜文字或其他占位符；要针对当前消息自然接话，不能复制上一条固定话术。"
     f"如果原消息明确要求你闭嘴、安静或停止说话，先输出一句可见收尾，再在末尾附加 {DEACTIVATE_MARKER}；"
     "其他情况正常回答，不要附加反激活标记。只输出修正后的最终回复。"
 )
@@ -744,11 +754,13 @@ def build_group_activation_instruction(
 
 
 def parse_reply_control(text: str) -> ReplyControlDecision:
-    raw = str(text or "")
+    raw = strip_internal_prompt_echo(text)
     skip_reply = SKIP_REPLY_MARKER in raw
     deactivate = DEACTIVATE_MARKER in raw
     cleaned = raw.replace(SKIP_REPLY_MARKER, "").replace(DEACTIVATE_MARKER, "")
     cleaned = re.sub(r"[ \t]+\n", "\n", cleaned).strip()
+    if not any(char.isalnum() for char in cleaned):
+        cleaned = ""
     return ReplyControlDecision(
         cleaned_text=cleaned,
         skip_reply=skip_reply,

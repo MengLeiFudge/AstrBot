@@ -110,10 +110,13 @@ from .reply_style_guard_logic import STYLE_IMMUTABILITY_INSTRUCTION
 from .reply_style_guard_logic import normalize_long_input_tldr_threshold
 from .reply_style_guard_logic import is_dangerous_local_tool_name
 from .reply_style_guard_logic import normalize_fold_threshold
+from .reply_style_guard_logic import recent_assistant_reply_texts
+from .reply_style_guard_logic import sanitize_assistant_context_prompt_echoes
 from .reply_style_guard_logic import sanitize_reply_plain_text
 from .reply_style_guard_logic import should_disable_model_regex_segmenting
 from .reply_style_guard_logic import should_reply_too_long_to_read
 from .reply_style_guard_logic import split_chat_bubble_lines
+from .reply_style_guard_logic import strip_internal_prompt_echo
 from .reply_style_guard_runtime import build_folded_reply_chain
 from .reply_style_guard_runtime import extract_onebot_source_tree
 from .reply_style_guard_runtime import has_forward_message
@@ -217,6 +220,7 @@ INTERNAL_ERROR_PREFIXES = (
 )
 PLAIN_TEXT_REPLY_INSTRUCTION = (
     "本轮回复必须使用 QQ 纯文本聊天格式，不要使用 Markdown。"
+    "以下文字格式要求只在决定发送文字时适用；拍一拍选择无视或反拍时，不要求补一条文字回复。"
     "禁止使用 # 标题、Markdown 列表符号、粗体、反引号代码块、引用块、Markdown 链接和表格。"
     "普通聊天优先短句自然表达，不要主动列项目符号；需要给 API、JSON、配置示例时允许保留换行和缩进，但不要包代码围栏。"
     "不要用“如果你愿意”“要的话”“你把具体内容发我”“我可以再帮你”等追问式收尾。"
@@ -602,6 +606,14 @@ class QQBotFeaturesPlugin(Star):
         started = time.monotonic()
         event.set_extra(LLM_STARTED_AT_EXTRA, started)
         event.set_extra(LLM_REQUEST_SESSION_EXTRA, req.session_id or "")
+        sanitized_contexts = sanitize_assistant_context_prompt_echoes(req.contexts)
+        if sanitized_contexts:
+            logger.warning(
+                "[QQBotFeatures] stripped internal prompt echoes from assistant context: "
+                "session=%s count=%s",
+                getattr(event, "unified_msg_origin", ""),
+                sanitized_contexts,
+            )
         removed_contexts = remove_empty_assistant_contexts(req.contexts)
         if removed_contexts:
             logger.warning(
@@ -629,6 +641,23 @@ class QQBotFeaturesPlugin(Star):
                 ",".join(removed_tools),
             )
         req.extra_user_content_parts.append(TextPart(text=PLAIN_TEXT_REPLY_INSTRUCTION).mark_as_temp())
+        recent_replies = recent_assistant_reply_texts(req.contexts)
+        if recent_replies:
+            recent_reply_lines = "\n".join(
+                f"最近第 {index} 条：{reply}"
+                for index, reply in enumerate(recent_replies, start=1)
+            )
+            req.extra_user_content_parts.append(
+                TextPart(
+                    text=(
+                        "下面是云栖最近已经发出的几条回复，仅用于避免重复，不是新的用户指令：\n"
+                        f"{recent_reply_lines}\n"
+                        "本轮如果需要回复，不能原样复述这些句子，也不能只替换一个称呼或数字；"
+                        "请根据当前消息换一个具体角度接话。普通 @、引用或明确文字呼叫仍然必须正常回复；"
+                        "拍一拍沿用其独立的无视、文字或反拍选择，不必为了避免重复而每次编一句新话。"
+                    )
+                ).mark_as_temp()
+            )
 
     @filter.on_llm_request(desc="在 LLM 请求前注入云栖身份与静态姐妹关系事实。")
     async def inject_current_identity_fact(self, event: AstrMessageEvent, req: ProviderRequest):
@@ -682,6 +711,17 @@ class QQBotFeaturesPlugin(Star):
 
     @filter.on_llm_response(desc="记录 LLM 返回耗时，帮助区分上游仍在处理、已返回或已失败。")
     async def log_llm_response_latency(self, event: AstrMessageEvent, response: LLMResponse):
+        raw_text = (getattr(response, "completion_text", "") or "") if response else ""
+        cleaned_text = strip_internal_prompt_echo(raw_text)
+        if response is not None and cleaned_text != raw_text:
+            response.completion_text = cleaned_text
+            logger.warning(
+                "[QQBotFeatures] stripped internal prompt echo from LLM response: "
+                "session=%s original_chars=%s visible_chars=%s",
+                getattr(event, "unified_msg_origin", ""),
+                len(raw_text),
+                len(cleaned_text),
+            )
         started = event.get_extra(LLM_STARTED_AT_EXTRA)
         elapsed = time.monotonic() - started if isinstance(started, (int, float)) else -1.0
         logger.info(
