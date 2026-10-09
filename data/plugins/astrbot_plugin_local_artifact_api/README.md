@@ -11,7 +11,7 @@
 ## 接口
 
 - `POST /admin/api/artifacts/publish-local`
-  - 只监听 `127.0.0.1` / `::1` / `localhost`。
+  - 固定监听 `127.0.0.1:8080`，只接受本机请求。
   - 校验请求时间、Git 上下文、文件路径和发布元数据。
   - `sha256` 校验 zip 文件本身。
   - `content_sha256` 只作为客户端声明的 zip 内容 hash；服务端会独立读取 zip 条目并计算内容 hash，不信任时间戳，也不只信任客户端传值。
@@ -19,18 +19,15 @@
   - 通过当前 AstrBot `aiocqhttp` OneBot 连接上传群文件。
   - 同一次请求向同一群上传多个变化文件时，先上传所有文件，最后只引用最后一个文件消息并发送一次发布说明。
 
-## 配置项
+## 部署地址
 
-- `host`
-  - 默认 `127.0.0.1`。
-  - 建议保持本机监听，不对局域网或公网开放。
-- `port`
-  - 默认 `8080`。
-  - 也可通过环境变量 `QQBOT_ASTRBOT_ARTIFACT_API_PORT` 覆盖。
+接口固定使用 `http://127.0.0.1:8080`，与项目启动脚本的就绪检查保持一致。
+不提供 `host` / `port` 插件配置，也不再读取 `QQBOT_ASTRBOT_ARTIFACT_API_PORT` 环境变量。
 
 ## 运行边界
 
 - 插件加载后监听本机接口，不依赖 profile 或 feature mode 环境变量。
+- 使用项目 `scripts/start.ps1` 启动 AstrBot；该入口设置 `QQBOT_ASTRBOT_ACCOUNT=1443944862`，供发布接口识别云栖账号。
 - 不读取 QQ 登录态、token、私聊记录或 AstrBot 运行日志。
 - 发布状态来自 `data\plugin_data\qqbot_features_runtime`。
 

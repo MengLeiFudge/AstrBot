@@ -22,6 +22,8 @@ python3 scripts/qqbot-maintenance/export-astrbot-config-examples.py
 
 云栖人格文本从 AstrBot WebUI 人格配置导出为 `personas.example.json`。夜凛、星遥和月澄只在云栖人格中作为静态姐妹关系，不配置为 AstrBot persona 或平台。
 
+图片按需处理：保持 `provider_ltm_settings.image_caption = false`，普通群图片不做背景描述；点名云栖并附图/引用图时，才由原生视觉请求处理。
+
 DSP 六个大型模组的唯一向量库由 `astrbot_plugin_dsp_knowledge` 从 `D:/project/dsp` 自动增量维护。新机器还需配置 `openai_embedding`（`qwen3.7-text-embedding`）与 `bailian_rerank`（`qwen3-rerank`）两个 provider；API key 只放真实运行配置。插件只在 `127.0.0.1:8081` 提供共享检索，夜凛不会保存第二份索引。
 
 DeepSeek Responses 默认模型 `deepseek-responses/deepseek-flash` 保持自定义请求体 `{"reasoning":{"effort":"none"}}`，供普通续聊候选、拍一拍、命名意图判断、空回复纠错和上下文压缩使用。在同一 provider source 下另建 ID 为 `deepseek-responses/deepseek-flash-reply` 的模型配置，实际模型仍是 `deepseek-flash`，能力列表与默认模型一致，自定义请求体填写 `{"reasoning":{"effort":"low"},"max_output_tokens":4096}`，无需复制 API key。

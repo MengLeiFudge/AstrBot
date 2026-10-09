@@ -5,8 +5,8 @@
 ## 运行边界
 
 - `ASTRBOT_ROOT` 固定为仓库根目录，真实运行数据位于 `data/`。
-- 唯一 aiocqhttp 平台是云栖 `1443944862`，Reverse WebSocket 监听 `0.0.0.0:6200`。
-- Dashboard 使用 `6185`；本地 artifact API 使用 `8080`。启动成功以三个端口都可连接为准。
+- 唯一 aiocqhttp 平台是云栖 `1443944862`，Reverse WebSocket 仅监听本机 `127.0.0.1:6200`。
+- Dashboard 使用 `6185`；本地 artifact API 固定使用 `127.0.0.1:8080`，不支持地址或端口覆盖。启动成功以三个端口都可连接为准。
 - 夜凛、星遥和月澄不是本 AstrBot 的平台、persona 或 worker，只在云栖人格和插件防回环列表中作为静态姐妹关系。
 - 启动不会自动更新源码或依赖版本。
 
@@ -18,13 +18,13 @@
 .\scripts\start.ps1
 ```
 
-脚本使用本项目的 `uv` 环境运行 `main.py`。默认先执行 `uv sync`，再把 `deployment/extra-requirements.txt` 的固定插件依赖安装进本项目 `.venv`，并在 `6185`、`6200`、`8080` 就绪后返回。常用参数：
+脚本直接使用本项目 `.venv/Scripts/python.exe` 运行 `main.py`，已有环境时不重复同步依赖。只有环境缺失时才执行 `uv sync`，并安装 `deployment/extra-requirements.txt` 中的固定插件依赖。后台进程不继承启动终端的标准流，日志直接写入文件；`6185`、`6200`、`8080` 就绪后入口输出耗时并返回。常用参数：
 
 - `-ForceRestart`：终止命令行属于本项目的 AstrBot 进程后重新启动。
-- `-SkipInstall`：已有 `.venv` 时跳过 `uv sync`。
+- `-SkipInstall`：禁止首次安装；已有 `.venv` 时默认复用，环境缺失时明确报错。
 - `-ReadyTimeoutSeconds 120`：设置端口就绪等待上限。
 
-日志写入 `data/logs/astrbot.stdout.log` 和 `data/logs/astrbot.stderr.log`。脚本不会启动 NapCat。
+日志写入 `data/logs/astrbot.stdout.log` 和 `data/logs/astrbot.stderr.log`。重启仅重新加载 AstrBot 及其插件，不启动或重启 NapCat。依赖更新使用下方更新入口；手动改变依赖清单时需显式执行对应 `uv sync` 和插件依赖安装。
 
 ## 更新
 

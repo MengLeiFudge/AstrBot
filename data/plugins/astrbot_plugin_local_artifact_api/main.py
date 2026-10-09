@@ -13,8 +13,8 @@ from astrbot.api.star import Context, Star, register
 
 
 LOCAL_ARTIFACT_PUBLISH_MAX_AGE_SECONDS = 5 * 60
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 8080
+HOST = "127.0.0.1"
+PORT = 8080
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,35 +30,39 @@ class HttpError(Exception):
     "0.1.1",
 )
 class LocalArtifactApiPlugin(Star):
-    def __init__(self, context: Context, config=None):
+    """Serve Yunqi's artifact API at the fixed localhost deployment address."""
+
+    def __init__(self, context: Context) -> None:
+        """Initialize listener state without configurable network endpoints.
+
+        Args:
+            context: AstrBot services providing the active OneBot platform.
+        """
         super().__init__(context)
         self._context = context
-        self._config = config or {}
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
-        self._host = str(self._config.get("host") or DEFAULT_HOST)
-        self._port = int(self._config.get("port") or os.environ.get("QQBOT_ASTRBOT_ARTIFACT_API_PORT") or DEFAULT_PORT)
 
     async def initialize(self) -> None:
         app = web.Application()
         app.router.add_post("/admin/api/artifacts/publish-local", self._publish_local)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
-        self._site = web.TCPSite(self._runner, self._host, self._port)
+        self._site = web.TCPSite(self._runner, HOST, PORT)
         try:
             await self._site.start()
         except OSError as exc:
             logger.warning(
                 "[LocalArtifactApi] failed to listen on %s:%s: %s",
-                self._host,
-                self._port,
+                HOST,
+                PORT,
                 exc,
             )
             await self._runner.cleanup()
             self._runner = None
             self._site = None
             return
-        logger.info("[LocalArtifactApi] listening on http://%s:%s", self._host, self._port)
+        logger.info("[LocalArtifactApi] listening on http://%s:%s", HOST, PORT)
 
     async def terminate(self) -> None:
         if self._runner is not None:

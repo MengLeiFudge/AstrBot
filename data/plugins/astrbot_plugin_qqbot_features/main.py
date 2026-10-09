@@ -23,6 +23,7 @@ from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 from astrbot.core.agent.message import TextPart
 from astrbot.core.star.filter.event_message_type import EventMessageType
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .bot_identity import KNOWN_SISTER_BOT_QQ_IDS
 from .bot_identity import YUNQI_IDENTITY_FACT
@@ -2987,10 +2988,15 @@ def build_arc_guess_event_result(event: AstrMessageEvent, result):
 
 
 def get_arc_assets_root() -> Path:
+    """Resolve Arc assets without relying on the former workspace layout.
+
+    Returns:
+        The configured assets directory, or Arc assets under the Core data root.
+    """
     raw = get_qqbot_config_value("paths", "arc_assets_root", "")
     if raw:
         return Path(raw)
-    return get_workspace_root() / "data" / "arc"
+    return get_astrbot_data_root() / "arc"
 
 
 def get_required_qqbot_config_path(section: str, key: str) -> Path:
@@ -3168,18 +3174,13 @@ def handle_sakura_command(event: AstrMessageEvent) -> str | None:
     return None
 
 
-def get_workspace_root() -> Path:
-    astrbot_root = os.environ.get("ASTRBOT_ROOT", "").strip()
-    if astrbot_root:
-        return Path(astrbot_root).resolve().parents[1]
-    return Path.cwd().resolve()
-
-
 def get_astrbot_data_root() -> Path:
-    astrbot_root = os.environ.get("ASTRBOT_ROOT", "").strip()
-    if astrbot_root:
-        return Path(astrbot_root).resolve() / "data"
-    return get_workspace_root() / "data" / "astrbot" / "data"
+    """Use the same data directory as Core for plugin configuration and state.
+
+    Returns:
+        The data directory selected by AstrBot's runtime root configuration.
+    """
+    return Path(get_astrbot_data_path())
 
 
 def get_qqbot_runtime_root() -> Path:
