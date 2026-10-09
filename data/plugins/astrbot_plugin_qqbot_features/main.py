@@ -1196,13 +1196,18 @@ class QQBotFeaturesPlugin(Star):
         if not _should_handle_migrated_command(event, self._feature_mode, command_type="factorio_download"):
             return
         try:
-            link = await asyncio.to_thread(fetch_factorio_space_age_windows_link)
+            stable_link, experimental_link = await asyncio.to_thread(
+                fetch_factorio_space_age_windows_links
+            )
         except FactorioDownloadError as exc:
             yield event.plain_result(f"Factorio: 没获取到 Space Age Windows 下载链接：{exc}")
             event.stop_event()
             return
         yield event.plain_result(
-            f"Factorio: Space Age Windows {link.version} 下载链接：\n{link.url}"
+            f"Factorio: Space Age Windows 稳定版 {stable_link.version} 下载链接：\n"
+            f"{stable_link.url}\n\n"
+            f"Factorio: Space Age Windows 测试版 {experimental_link.version} 下载链接：\n"
+            f"{experimental_link.url}"
         )
         event.stop_event()
 
@@ -3231,34 +3236,74 @@ def get_player_name(event: AstrMessageEvent) -> str:
     return resolve_display_name(event.get_group_id(), event.get_sender_id())
 
 
-def fetch_factorio_space_age_windows_link() -> FactorioDownloadLink:
+def fetch_factorio_space_age_windows_links() -> tuple[
+    FactorioDownloadLink,
+    FactorioDownloadLink,
+]:
+    """Resolve current Space Age Windows links for both release channels.
+
+    Returns:
+        A pair ordered as the stable link followed by the experimental link.
+
+    Raises:
+        FactorioDownloadError: If credentials, versions, or either link cannot be resolved.
+    """
     credentials = load_factorio_credentials()
-    version = fetch_stable_space_age_version()
+    versions = fetch_space_age_versions()
     query = urlencode({"username": credentials.username, "token": credentials.token})
-    url = f"https://www.factorio.com/get-download/{version}/expansion/win64?{query}"
-    request = Request(url, headers={"User-Agent": "qqbot-astrbot-factorio-download-link/1.0"})
-    try:
-        with build_opener(_NoRedirectHandler()).open(request, timeout=30.0) as response:
-            if 200 <= response.status < 300:
-                return FactorioDownloadLink(version=version, url=response.url)
-            raise FactorioDownloadError(f"Factorio 下载接口返回 HTTP {response.status}")
-    except HTTPError as exc:
-        if exc.code in {301, 302, 303, 307, 308}:
-            location = exc.headers.get("Location", "").strip()
-            if location:
-                return FactorioDownloadLink(version=version, url=urljoin(url, location))
-        if exc.code in {401, 403}:
-            raise FactorioDownloadError("Factorio 凭据无效或账号没有 Space Age 下载权限") from exc
-        if exc.code == 404:
-            raise FactorioDownloadError("Factorio 官网没有提供当前版本的 Space Age Windows 安装包") from exc
-        raise FactorioDownloadError(f"Factorio 下载接口返回 HTTP {exc.code}") from exc
-    except URLError as exc:
-        raise FactorioDownloadError(f"无法连接 Factorio 下载接口：{exc.reason}") from exc
-    except TimeoutError as exc:
-        raise FactorioDownloadError("连接 Factorio 下载接口超时") from exc
+    links: list[FactorioDownloadLink] = []
+    for version in versions:
+        url = f"https://www.factorio.com/get-download/{version}/expansion/win64?{query}"
+        request = Request(
+            url,
+            headers={"User-Agent": "qqbot-astrbot-factorio-download-link/1.0"},
+        )
+        try:
+            with build_opener(_NoRedirectHandler()).open(
+                request,
+                timeout=30.0,
+            ) as response:
+                if 200 <= response.status < 300:
+                    links.append(
+                        FactorioDownloadLink(version=version, url=response.url)
+                    )
+                    continue
+                raise FactorioDownloadError(
+                    f"Factorio 下载接口返回 HTTP {response.status}"
+                )
+        except HTTPError as exc:
+            if exc.code in {301, 302, 303, 307, 308}:
+                location = exc.headers.get("Location", "").strip()
+                if location:
+                    links.append(
+                        FactorioDownloadLink(version=version, url=urljoin(url, location))
+                    )
+                    continue
+            if exc.code in {401, 403}:
+                raise FactorioDownloadError(
+                    "Factorio 凭据无效或账号没有 Space Age 下载权限"
+                ) from exc
+            if exc.code == 404:
+                raise FactorioDownloadError(
+                    "Factorio 官网没有提供当前版本的 Space Age Windows 安装包"
+                ) from exc
+            raise FactorioDownloadError(f"Factorio 下载接口返回 HTTP {exc.code}") from exc
+        except URLError as exc:
+            raise FactorioDownloadError(f"无法连接 Factorio 下载接口：{exc.reason}") from exc
+        except TimeoutError as exc:
+            raise FactorioDownloadError("连接 Factorio 下载接口超时") from exc
+    return links[0], links[1]
 
 
-def fetch_stable_space_age_version() -> str:
+def fetch_space_age_versions() -> tuple[str, str]:
+    """Fetch current Space Age versions for both release channels.
+
+    Returns:
+        A pair ordered as the stable version followed by the experimental version.
+
+    Raises:
+        FactorioDownloadError: If the release API fails or either version is missing.
+    """
     request = Request(
         "https://factorio.com/api/latest-releases",
         headers={"User-Agent": "qqbot-astrbot-factorio-download-link/1.0"},
@@ -3276,11 +3321,16 @@ def fetch_stable_space_age_version() -> str:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise FactorioDownloadError("Factorio 版本接口返回内容不是 JSON") from exc
-    stable = data.get("stable") if isinstance(data, dict) else None
-    version = stable.get("expansion") if isinstance(stable, dict) else None
-    if not isinstance(version, str) or not version.strip():
-        raise FactorioDownloadError("Factorio 版本接口缺少 stable.expansion 版本号")
-    return version.strip()
+    versions: list[str] = []
+    for channel in ("stable", "experimental"):
+        release = data.get(channel) if isinstance(data, dict) else None
+        version = release.get("expansion") if isinstance(release, dict) else None
+        if not isinstance(version, str) or not version.strip():
+            raise FactorioDownloadError(
+                f"Factorio 版本接口缺少 {channel}.expansion 版本号"
+            )
+        versions.append(version.strip())
+    return versions[0], versions[1]
 
 
 def load_factorio_credentials() -> FactorioCredentials:
