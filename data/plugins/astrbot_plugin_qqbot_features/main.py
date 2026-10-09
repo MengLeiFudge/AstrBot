@@ -142,6 +142,7 @@ from .sub2api_usage import looks_like_sub2api_usage_command
 from .sub2api_usage import parse_sub2api_usage_command
 from .sub2api_usage import retain_failed_account_ranking
 from .sub2api_usage import Sub2APIUsageCache
+from .sub2api_usage import supports_sub2api_account_seven_day_ranking
 from .sub2api_usage import update_sub2api_usage_alert_state
 from .sub2api_usage_image import render_sub2api_usage_image
 
@@ -1225,6 +1226,20 @@ class QQBotFeaturesPlugin(Star):
             )
             chain = [random_summary_image_from_file(image_path)]
             codexradar_path = self._codexradar_efficiency_image_path
+            if codexradar_path is None or not codexradar_path.is_file():
+                try:
+                    codexradar_snapshot = await asyncio.to_thread(fetch_codexradar_efficiency)
+                    codexradar_path = await asyncio.to_thread(
+                        render_codexradar_efficiency_image,
+                        snapshot=codexradar_snapshot,
+                        output_dir=get_codexradar_efficiency_image_cache_root(),
+                    )
+                    self._codexradar_efficiency_image_path = codexradar_path
+                except Exception as codexradar_exc:
+                    logger.warning(
+                        "[QQBotFeatures] failed to recover CodexRadar efficiency image for usage command: %s",
+                        codexradar_exc,
+                    )
             if codexradar_path is not None and codexradar_path.is_file():
                 chain.append(random_summary_image_from_file(codexradar_path))
             yield event.chain_result(chain)
@@ -1333,6 +1348,8 @@ class QQBotFeaturesPlugin(Star):
             ranking_now = datetime.now(timezone.utc)
             refreshed_rankings: list[Sub2APIAccountSevenDayRanking] = []
             for account in accounts:
+                if not supports_sub2api_account_seven_day_ranking(account):
+                    continue
                 refreshed_rankings.append(
                     await self._refresh_sub2api_account_ranking(
                         account,
