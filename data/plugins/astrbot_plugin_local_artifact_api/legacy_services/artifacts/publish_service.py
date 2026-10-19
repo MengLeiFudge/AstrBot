@@ -393,28 +393,17 @@ def build_local_artifact_publish_message(
     message: str = "",
     reply_message_id: str = "",
 ) -> str:
+    """Format a file reply with branch, short commit, subject and numbered changes."""
     reply_prefix = _build_reply_prefix(reply_message_id)
+    headline = f"{context.branch.strip()} {context.commit_hash.strip()[:7]}".strip() or "本次构建"
+    lines = [f"{reply_prefix}{headline}"]
     subject = context.commit_subject.strip()
-    commit = context.commit_hash.strip()
-    if commit and subject:
-        headline = f"{commit[:7]} {subject}"
-    elif commit:
-        headline = commit[:7]
-    else:
-        headline = "本次构建"
-
-    lines = [f"{reply_prefix}{headline}".strip()]
-    if context.branch.strip():
-        lines.extend(["", f"分支：{context.branch.strip()}"])
-
-    detail = (message or context.commit_detail).strip()
-    if detail:
-        fields = _parse_publish_summary(detail)
-        if fields:
-            lines.extend(_build_type_sections(_commit_type(subject), fields))
-        else:
-            lines.extend(["", detail])
-    return "\n".join(line for line in lines if line is not None).strip()
+    if subject:
+        lines.append(subject)
+    detail = message.strip() or context.commit_detail.strip()
+    changes = [_strip_list_marker(line.strip()) for line in detail.splitlines() if line.strip()]
+    lines.extend(f"{index}.{change}" for index, change in enumerate(filter(None, changes), 1))
+    return "\n".join(lines)
 
 
 def build_latest_commit_message(repo_path: str | Path) -> str:
