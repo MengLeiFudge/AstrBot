@@ -165,7 +165,13 @@ async def publish_local_artifacts(
             )
             reply_message_id = _extract_message_id(upload_result)
             if not reply_message_id:
-                reply_message_id = await find_uploaded_file_message_id(bot, group_id, upload_name)
+                upload_data = upload_result.get("data", upload_result) if isinstance(upload_result, dict) else {}
+                file_id = _first_text(upload_data, "file_id") if isinstance(upload_data, dict) else ""
+                if not file_id:
+                    raise RuntimeError(f"Uploaded {upload_name}, but NapCat returned no file ID for its reply.")
+                reply_message_id = await find_uploaded_file_message_id(bot, group_id, upload_name, file_id=file_id)
+            if not reply_message_id:
+                raise RuntimeError(f"Uploaded {upload_name}, but its file message was not found; announcement not sent.")
             notice = notices.setdefault(group_id, LocalArtifactPublishNotice())
             notice.reply_message_id = reply_message_id
             if artifact.message.strip():
@@ -177,22 +183,27 @@ async def publish_local_artifacts(
                     "name": upload_name,
                     "sha256": actual_sha256,
                     "content_sha256": server_content_sha256,
+                    "reply_message_id": reply_message_id,
                 }
             )
+    for group_id, notice in notices.items():
+        text = build_local_artifact_publish_message(context, notice.message)
+        response = await bot.call_api("send_group_msg", group_id=group_id, message=[
+            {"type": "reply", "data": {"id": notice.reply_message_id}},
+            {"type": "text", "data": {"text": text}},
+        ])
+        notice_id = _extract_message_id(response)
+        if not notice_id:
+            raise RuntimeError(f"Group {group_id} returned no message ID for the release announcement.")
+        # A failed announcement must not poison the content guard for a later retry.
+        for item in uploaded:
+            if item["group_id"] != group_id:
+                continue
+            item["notice_message_id"] = notice_id
             save_last_local_artifact_published_sha(
-                group_id,
-                upload_name,
-                server_content_sha256,
+                group_id, item["name"], item["content_sha256"],
                 data_root=data_root,
             )
-    for group_id, notice in notices.items():
-        message = build_local_artifact_publish_message(
-            context,
-            notice.message,
-            reply_message_id=notice.reply_message_id,
-        )
-        if message:
-            await bot.call_api("send_group_msg", group_id=group_id, message=message)
     return LocalArtifactPublishResult(uploaded=uploaded, deleted=deleted, skipped=skipped)
 
 
@@ -347,6 +358,7 @@ async def find_uploaded_file_message_id(
     group_id: int,
     file_name: str,
     *,
+    file_id: str = "",
     retries: int = 5,
     delay_seconds: float = 0.3,
 ) -> str:
@@ -354,7 +366,7 @@ async def find_uploaded_file_message_id(
         return ""
     for attempt in range(max(1, retries)):
         payload = await _get_recent_group_messages(bot, group_id)
-        message_id = _extract_file_message_id_from_history(payload, file_name)
+        message_id = _extract_file_message_id_from_history(payload, file_name, file_id=file_id)
         if message_id:
             return message_id
         if attempt + 1 < retries:
@@ -436,16 +448,16 @@ def read_latest_commit_summary(repo_path: str | Path | None) -> CommitSummary | 
 
 
 def _build_reply_prefix(message_id: str) -> str:
-    return f"[CQ:reply,id={message_id}]" if message_id.isdigit() else ""
+    return f"[CQ:reply,id={message_id}]" if re.fullmatch(r"-?\d+", message_id) else ""
 
 
 def _extract_message_id(payload: Any) -> str:
     if not isinstance(payload, dict):
         return ""
-    for key in ("message_id", "msg_id", "id"):
-        value = payload.get(key)
-        if value not in (None, ""):
-            return str(value)
+    for key in ("message_id", "msg_id"):
+        value = str(payload.get(key) or "")
+        if re.fullmatch(r"-?\d+", value):
+            return value
     data = payload.get("data")
     if isinstance(data, dict):
         return _extract_message_id(data)
@@ -464,13 +476,25 @@ async def _get_recent_group_messages(bot: Any, group_id: int) -> Any:
     return None
 
 
-def _extract_file_message_id_from_history(payload: Any, file_name: str) -> str:
+def _extract_file_message_id_from_history(payload: Any, file_name: str, *, file_id: str = "") -> str:
     target = file_name.strip()
     for message in reversed(_extract_history_messages(payload)):
-        if _message_contains_file_name(message, target):
-            message_id = _extract_message_id(message)
-            if message_id:
-                return message_id
+        if file_id:
+            # The upload UUID identifies this file across folders and same-named releases.
+            segments = message.get("message") if isinstance(message, dict) else None
+            if not isinstance(segments, list) or not any(
+                isinstance(segment, dict) and segment.get("type") == "file"
+                and isinstance(segment.get("data"), dict)
+                and str(segment["data"].get("file_id") or "") == file_id
+                and _first_text(segment["data"], "file", "name", "file_name") == target
+                for segment in segments
+            ):
+                continue
+        elif not _message_contains_file_name(message, target):
+            continue
+        message_id = _extract_message_id(message)
+        if message_id:
+            return message_id
     return ""
 
 
