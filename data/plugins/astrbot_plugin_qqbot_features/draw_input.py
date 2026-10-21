@@ -140,7 +140,7 @@ async def prepare_explicit_draw_request(
     if "豆豆眼" in prompt:
         try:
             # Decode bytes directly: the preset must retain its original whitespace.
-            prompt = (Path(__file__).parent / "prompts" / "doudouyan.txt").read_bytes().decode("utf-8")
+            prompt = (Path(__file__).parent / "prompts" / "doudouyan-v1.txt").read_bytes().decode("utf-8")
             if not prompt:
                 raise ValueError("empty preset")
         except (OSError, UnicodeError, ValueError) as exc:
@@ -194,6 +194,29 @@ async def prepare_explicit_draw_request(
                 if not re.match(r"^(?:https?://|file://|/|[A-Za-z]:[\\/])", source):
                     raise ValueError("图片地址已失效，请重新发送")
         return await preload_draw_references(RightCodesDrawRequest(prompt=prompt, model=model, image_urls=(source,)))
+
+
+def prepare_doudouyan_requests(request: RightCodesDrawRequest) -> tuple[RightCodesDrawRequest, ...]:
+    """Expand a prepared preset request before reserving points.
+
+    Args:
+        request: Korean v1 prompt and one already loaded reference image.
+
+    Returns:
+        Four independent requests ordered as v1, v1, v3, v3.
+
+    Raises:
+        ValueError: If the reference or the complete Chinese preset is unavailable.
+    """
+    if len(request.image_urls) != 1:
+        raise ValueError("豆豆眼生成需要一张原图")
+    try:
+        prompt = (Path(__file__).parent / "prompts" / "doudouyan-v3.txt").read_bytes().decode("utf-8")
+        if not prompt.strip():
+            raise ValueError("empty preset")
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ValueError("豆豆眼v3提示词读取失败，请联系管理员") from exc
+    return tuple(replace(request, prompt=text) for text in (request.prompt, request.prompt, prompt, prompt))
 
 
 async def preload_draw_references(request: RightCodesDrawRequest) -> RightCodesDrawRequest:

@@ -123,6 +123,32 @@ class RightCodesDrawClient:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
 
+    async def draw_batch(
+        self, requests: tuple[RightCodesDrawRequest, ...],
+    ) -> tuple[RightCodesDrawResult | BaseException, ...]:
+        """Await all one-image calls concurrently without discarding partial success.
+
+        Args:
+            requests: One ordinary request or four prepared preset requests.
+
+        Returns:
+            Results or failures in request order; each call has this client's deadline.
+
+        Raises:
+            ValueError: If the batch size is unsupported.
+            asyncio.CancelledError: If the caller cancels; all children are awaited.
+        """
+        if len(requests) not in (1, 4):
+            raise ValueError("生图批次必须包含一张或四张")
+        tasks = [asyncio.create_task(self.draw(request)) for request in requests]
+        try:
+            return tuple(await asyncio.gather(*tasks, return_exceptions=True))
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def draw(self, request: RightCodesDrawRequest) -> RightCodesDrawResult:
         """Generate one image, uploading references through the Images edits API.
 

@@ -35,7 +35,7 @@ from .comic_pdf import ComicPdfService
 from .comic_pdf import is_onebot_friend
 from .comic_pdf import load_comic_pdf_config
 from .comic_pdf import send_private_pdfs_with_password
-from .draw_input import STANDARD_DRAW_PREFIX, doudouyan_command_parts, prepare_explicit_draw_request, preload_draw_references
+from .draw_input import STANDARD_DRAW_PREFIX, doudouyan_command_parts, prepare_doudouyan_requests, prepare_explicit_draw_request, preload_draw_references
 from .draw_output import save_generated_image
 from .draw_intent import DRAW_INTENT_SYSTEM, DrawIntentRouter, component_text
 from .image_summary import prepare_onebot_image_summary_chain
@@ -1810,6 +1810,7 @@ class QQBotFeaturesPlugin(Star):
                         return
                     draw_request = rewritten_request
                 draw_request = await preload_draw_references(draw_request)
+            draw_requests = prepare_doudouyan_requests(draw_request) if preset_parts is not None else (draw_request,)
         except Exception as exc:
             logger.warning("[QQBotFeatures] draw input preparation failed: error_type=%s", type(exc).__name__)
             detail = str(exc) if isinstance(exc, ValueError) else "原图读取失败或超时，请重新附图或引用"
@@ -1840,7 +1841,7 @@ class QQBotFeaturesPlugin(Star):
                 start_message += ("\n提示词来源：豆豆眼预设（完整固定原文）" if preset_parts is not None
                                   else "\n提示词来源：用户话语（无预设）")
                 if preset_parts is not None:
-                    start_message += "\n本次按固定原文生成，不追加其他描述。"
+                    start_message += "\n韩文v1和中文v3各生成2张，四张并行，完成后全部发送。本次共扣一次积分。"
                     if natural_intent is not None and natural_intent.source is not None:
                         start_message += f"\n本次来源：{natural_intent.source.label}"
                     elif component_text(preset_parts).startswith("头像生图"):
@@ -1860,14 +1861,23 @@ class QQBotFeaturesPlugin(Star):
 
             try:
                 async with asyncio.timeout_at(deadline):
-                    async with self._rightcodes_draw_lock:
-                        remaining = deadline - asyncio.get_running_loop().time()
-                        result = await RightCodesDrawClient(
-                            api_key=api_key,
-                            base_url=self._rightcodes_config.base_url,
-                            timeout_seconds=remaining,
-                        ).draw(draw_request)
-                        generated = True
+                    await self._rightcodes_draw_lock.acquire()
+                try:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    outcomes = await RightCodesDrawClient(
+                        api_key=api_key,
+                        base_url=self._rightcodes_config.base_url,
+                        timeout_seconds=max(0.0, remaining),
+                    ).draw_batch(draw_requests)
+                finally:
+                    self._rightcodes_draw_lock.release()
+                results = tuple(item for item in outcomes if isinstance(item, RightCodesDrawResult))
+                if not results:
+                    raise next(item for item in outcomes if isinstance(item, BaseException))
+                generated = True
+                for item in outcomes:
+                    if isinstance(item, BaseException):
+                        logger.warning("[QQBotFeatures] draw batch item failed: error_type=%s", type(item).__name__)
             except asyncio.TimeoutError:
                 await refund_once()
                 yield _chain_result_with_reply(
@@ -1890,44 +1900,57 @@ class QQBotFeaturesPlugin(Star):
             raise
 
         try:
-            await self._deliver_draw_result(event, result, draw_request.model, refund_once)
+            await self._deliver_draw_result(event, results, draw_request.model, refund_once, expected_count=len(draw_requests))
         finally:
             event.stop_event()
 
     async def _deliver_draw_result(
         self,
         event: AstrMessageEvent,
-        result: RightCodesDrawResult,
+        results: tuple[RightCodesDrawResult, ...],
         model: str,
         refund: Callable[[], Awaitable[None]],
+        *,
+        expected_count: int,
     ) -> None:
-        """Save a generated PNG and await delivery so failures remain observable.
+        """Save every successful PNG and send all images in one awaited message.
 
         Args:
             event: Command event with its original reply destination.
-            result: Validated image bytes and generation timing.
+            results: All successful images in request order.
             model: Selected model for the completion message.
             refund: Request-scoped, at-most-once point refund operation.
+            expected_count: Requested image count, including any failed calls.
         """
-        saved = None
-        try:
-            saved = await asyncio.to_thread(save_generated_image, result.image_bytes, self._rightcodes_config.data_root)
-        except Exception as exc:
-            logger.error("[QQBotFeatures] draw persistence failed: error_type=%s", type(exc).__name__)
-        message = format_rightcodes_draw_success(result, model=model)
-        if saved is not None:
-            image = random_summary_image_from_file(saved)
-        else:
-            message += "\n图片未保存到本地，已尝试直接交付，请及时保存。"
-            image = Image.fromBytes(result.image_bytes)
-            image.__dict__["summary"] = choose_image_summary()
+        saved_paths = []
+        images = []
+        for result in results:
+            saved = None
+            try:
+                saved = await asyncio.to_thread(save_generated_image, result.image_bytes, self._rightcodes_config.data_root)
+            except Exception as exc:
+                logger.error("[QQBotFeatures] draw persistence failed: error_type=%s", type(exc).__name__)
+            if saved is not None:
+                saved_paths.append(saved)
+                images.append(random_summary_image_from_file(saved))
+            else:
+                image = Image.fromBytes(result.image_bytes)
+                image.__dict__["summary"] = choose_image_summary()
+                images.append(image)
+        message = format_rightcodes_draw_success(
+            max(results, key=lambda item: item.total_seconds), model=model, image_count=len(results),
+        )
+        if len(results) < expected_count:
+            message += f"\n本次{expected_count}张中有{expected_count - len(results)}张生成失败，以下为全部成功结果，未重复生成。"
+        if len(saved_paths) < len(results):
+            message += "\n部分图片未保存到本地，已尝试直接交付，请及时保存。"
         try:
             async with asyncio.timeout(60):
-                await event.send(_chain_result_with_reply(event, [Plain(message), image]))
+                await event.send(_chain_result_with_reply(event, [Plain(message), *images]))
             return
         except Exception as exc:
-            logger.warning("[QQBotFeatures] draw delivery failed: error_type=%s saved=%s", type(exc).__name__, saved)
-        if saved is None:
+            logger.warning("[QQBotFeatures] draw delivery failed: error_type=%s saved=%s", type(exc).__name__, saved_paths)
+        if not saved_paths:
             try:
                 await refund()
                 notice = "图片已生成，但保存和发送均失败，本次积分已退回。"
@@ -1935,7 +1958,8 @@ class QQBotFeaturesPlugin(Star):
                 logger.error("[QQBotFeatures] draw refund failed: error_type=%s", type(exc).__name__)
                 notice = "图片已生成，但保存和发送均失败；积分退款失败，请联系管理员处理。"
         else:
-            notice = f"图片已生成并保存，但发送失败。请联系管理员取回：{saved.name}。本次未退积分。"
+            names = "、".join(path.name for path in saved_paths)
+            notice = f"图片发送失败，已有{len(saved_paths)}张保存在本地。请联系管理员取回：{names}。本次未退积分。"
         try:
             async with asyncio.timeout(15):
                 await event.send(event.plain_result(notice))
