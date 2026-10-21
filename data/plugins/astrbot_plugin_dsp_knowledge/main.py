@@ -260,7 +260,7 @@ class DspKnowledgePlugin(Star):
 
 
 def _effective_query(event: AstrMessageEvent, prompt: str) -> str:
-    """Combine the current prompt with bounded text from quoted messages."""
+    """Return the current question, adding labelled context only for explicit quotes."""
 
     current = str(prompt or "").strip()
     if not current:
@@ -285,6 +285,8 @@ def _effective_query(event: AstrMessageEvent, prompt: str) -> str:
             ).strip()
         if text and text not in {"[图片]", "[image]"}:
             quoted.append(text)
+    if not quoted:
+        return current[:4_000].strip()
     parts = [f"被引用消息：{text}" for text in quoted]
     if current:
         parts.append(f"当前消息：{current}")

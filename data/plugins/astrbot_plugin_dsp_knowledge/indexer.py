@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import asyncio
 import json
+import time
 
 from astrbot.api import logger
 from astrbot.core.star.context import Context
@@ -19,6 +21,8 @@ MANAGED_DESCRIPTION = (
 )
 MANAGED_DOCUMENT_PREFIX = "dsp-major-managed-v1--"
 MANIFEST_VERSION = 1
+SEARCH_CACHE_TTL_SECONDS = 3_600
+SEARCH_CACHE_MAX_ENTRIES = 128
 
 
 class KnowledgeIndexUnavailableError(RuntimeError):
@@ -32,6 +36,14 @@ class KnowledgeSearchResult:
     matched: bool
     evidence: str = ""
     hit_count: int = 0
+
+
+@dataclass(slots=True)
+class _QueryLock:
+    """Serialize one query while retaining its lock until all active and queued users leave."""
+
+    lock: asyncio.Lock
+    users: int = 0
 
 
 class SharedDspKnowledgeIndex:
@@ -65,6 +77,13 @@ class SharedDspKnowledgeIndex:
         self._file_count = 0
         self._shard_count = 0
         self._chunk_count = 0
+        self._search_locks: dict[str, _QueryLock] = {}
+        self._search_cache: OrderedDict[str, tuple[float, KnowledgeSearchResult]] = OrderedDict()
+        self._cache_generation = 0
+        self._search_requests = 0
+        self._search_skipped = 0
+        self._retrieval_requests = 0
+        self._cache_hits = 0
 
     @property
     def syncing(self) -> bool:
@@ -83,6 +102,11 @@ class SharedDspKnowledgeIndex:
             "shard_count": self._shard_count,
             "chunk_count": self._chunk_count,
             "catalog_version": CATALOG_VERSION,
+            "search_requests": self._search_requests,
+            "search_skipped": self._search_skipped,
+            "retrieval_requests": self._retrieval_requests,
+            "cache_hits": self._cache_hits,
+            "cached_queries": len(self._search_cache),
         }
 
     async def synchronize(self) -> dict[str, int]:
@@ -101,12 +125,25 @@ class SharedDspKnowledgeIndex:
             self._last_error = ""
             try:
                 snapshot = await asyncio.to_thread(build_catalog_snapshot, self._source_root)
+                manifest = self._load_manifest()
+                records = manifest["shards"]
+                source_digests = {shard.key: shard.digest for shard in snapshot.shards}
+                indexed_digests = {
+                    key: record.get("digest", "")
+                    for key, record in records.items()
+                    if isinstance(record, dict)
+                }
+                if source_digests != indexed_digests:
+                    # Invalidate before a partial source replacement can change retrieval.
+                    self._cache_generation += 1
+                    self._search_cache.clear()
                 helper, recreated = await self._ensure_knowledge_base()
                 documents = await helper.list_documents(limit=1_000)
                 documents_by_id = {document.doc_id: document for document in documents}
                 documents_by_name = {document.doc_name: document for document in documents}
-                manifest = self._load_manifest()
                 if recreated or manifest.get("kb_id") != helper.kb.kb_id:
+                    self._cache_generation += 1
+                    self._search_cache.clear()
                     manifest = self._empty_manifest(helper.kb.kb_id)
                 records = manifest["shards"]
                 active_keys = {shard.key for shard in snapshot.shards}
@@ -216,31 +253,77 @@ class SharedDspKnowledgeIndex:
                 self._syncing = False
 
     async def search(self, query: str, group_id: str = "") -> KnowledgeSearchResult:
-        """Retrieve reranked evidence when the request targets the DSP corpus.
+        """Reuse bounded evidence for identical queries against unchanged source shards.
 
         Args:
             query: Current user question and any explicit quoted context.
             group_id: Structured QQ group ID used only for known DSP group routing.
 
         Returns:
-            Match state and bounded evidence for the caller's own chat model.
+            Match state and evidence from the existing dense/sparse/rerank pipeline.
 
         Raises:
             KnowledgeIndexUnavailableError: If synchronization is active or no index is ready.
         """
-
+        self._search_requests += 1
         clean_query = str(query or "").strip()
         if not query_targets_dsp_knowledge(clean_query, group_id):
+            self._search_skipped += 1
             return KnowledgeSearchResult(matched=False)
         if self._syncing:
             raise KnowledgeIndexUnavailableError("DSP knowledge synchronization is in progress")
-        if not self._ready:
-            await self._refresh_readiness_from_kb()
-        if not self._ready:
-            raise KnowledgeIndexUnavailableError(self._last_error or "DSP knowledge index is not ready")
+        # Only identical queries share a lock; unrelated questions remain concurrent.
+        slot = self._search_locks.get(clean_query)
+        if slot is None:
+            slot = _QueryLock(asyncio.Lock())
+            self._search_locks[clean_query] = slot
+        slot.users += 1
+        try:
+            async with slot.lock:
+                if self._syncing:
+                    raise KnowledgeIndexUnavailableError("DSP knowledge synchronization is in progress")
+                if not self._ready:
+                    await self._refresh_readiness_from_kb()
+                if self._syncing:
+                    raise KnowledgeIndexUnavailableError("DSP knowledge synchronization is in progress")
+                if not self._ready:
+                    raise KnowledgeIndexUnavailableError(self._last_error or "DSP knowledge index is not ready")
+                now = time.monotonic()
+                for key, (expires_at, _) in tuple(self._search_cache.items()):
+                    if expires_at <= now:
+                        del self._search_cache[key]
+                cached = self._search_cache.get(clean_query)
+                if cached is not None:
+                    self._search_cache.move_to_end(clean_query)
+                    self._cache_hits += 1
+                    return cached[1]
+                generation = self._cache_generation
+                self._retrieval_requests += 1
+                result = await self._retrieve_evidence(clean_query)
+                # Do not repopulate the cache with a result from an older index generation.
+                if generation == self._cache_generation and not self._syncing:
+                    self._search_cache[clean_query] = (
+                        time.monotonic() + SEARCH_CACHE_TTL_SECONDS, result
+                    )
+                    if len(self._search_cache) > SEARCH_CACHE_MAX_ENTRIES:
+                        self._search_cache.popitem(last=False)
+                return result
+        finally:
+            slot.users -= 1
+            if slot.users == 0:
+                del self._search_locks[clean_query]
 
+    async def _retrieve_evidence(self, query: str) -> KnowledgeSearchResult:
+        """Run the native retrieval pipeline and bound its evidence for both bots.
+
+        Args:
+            query: The current question, including explicit quoted context when present.
+
+        Returns:
+            A successful retrieval result, including an empty result when no evidence matched.
+        """
         payload = await self._context.kb_manager.retrieve(
-            query=clean_query,
+            query=query,
             kb_names=[self._knowledge_base_name],
             top_k_fusion=max(16, self._max_results * 4),
             top_m_final=self._max_results,

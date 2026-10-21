@@ -67,6 +67,14 @@ NON_DSP_DOMAIN_ALIASES = (
     "shapez",
     "异形工厂",
 )
+# Complete conversational acknowledgements do not require fresh source evidence.
+CHAT_ONLY_QUERIES = frozenset({
+    "你好", "您好", "嗨", "哈喽", "hello", "hi", "早", "早安", "早上好",
+    "中午好", "下午好", "晚上好", "晚安", "谢谢", "谢谢你", "谢谢啦",
+    "多谢", "感谢", "辛苦了", "不客气", "不用谢", "收到", "知道了",
+    "明白了", "了解", "懂了", "好的", "好", "好吧", "ok", "okay",
+    "嗯", "嗯嗯", "哦", "噢", "哈哈", "哈哈哈", "哈哈哈哈",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,11 +230,17 @@ def query_targets_dsp_knowledge(query: str, group_id: str = "") -> bool:
         group_id: Structured QQ group ID. Known mod groups bias otherwise unclassified queries.
 
     Returns:
-        True when the query or group identifies DSP or one of the six indexed mods.
+        True when the query can need DSP source evidence.
+        Known mod groups retain unnamed mechanism questions and contextual follow-ups.
     """
 
     normalized = re.sub(r"\s+", " ", str(query or "").strip().casefold())
     if not normalized:
+        return False
+    # Match the whole utterance; a thank-you followed by a question must still retrieve.
+    chat_text = re.sub(r"^(?:云栖|夜凛)[\s，,：:]*", "", normalized)
+    chat_text = chat_text.strip(" ，。,.!！~～…")
+    if chat_text in CHAT_ONLY_QUERIES or not re.search(r"\w", normalized):
         return False
     aliases = GENERAL_DSP_ALIASES + tuple(alias for module in MODULES for alias in module.aliases)
     for alias in aliases:
