@@ -29,6 +29,8 @@ class LocalArtifactPublishFile:
     sha256: str = ""
     content_sha256: str = ""
     message: str = ""
+    # Empty means group root; nonempty values are opaque QQ folder IDs.
+    folder_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +125,17 @@ async def publish_local_artifacts(
     skipped: list[dict[str, object]] = []
     notices: dict[int, LocalArtifactPublishNotice] = {}
 
+    # Validate explicit destinations before any deletion or upload in this request.
+    destinations = {(group, item.folder_id) for item in files for group in item.targets if item.folder_id}
+    for group_id, folder_id in sorted(destinations):
+        root = await bot.call_api("get_group_root_files", group_id=group_id)
+        folders = root.get("folders") if isinstance(root, dict) else None
+        if not isinstance(folders, list) or not any(
+            isinstance(folder, dict) and _first_text(folder, "folder_id", "id") == folder_id
+            for folder in folders
+        ):
+            raise ValueError(f"Group {group_id} has no accessible folder {folder_id}.")
+
     for artifact in files:
         package_path = normalize_local_path(artifact.path)
         upload_name = artifact.name.strip() or package_path.name
@@ -141,10 +154,12 @@ async def publish_local_artifacts(
                 upload_name,
                 server_content_sha256,
                 data_root=data_root,
+                folder_id=artifact.folder_id,
             ):
                 skipped.append(
                     {
                         "group_id": group_id,
+                        "folder_id": artifact.folder_id,
                         "file": str(package_path),
                         "name": upload_name,
                         "sha256": actual_sha256,
@@ -154,14 +169,19 @@ async def publish_local_artifacts(
                 )
                 continue
 
-            deleted_names = await delete_same_named_group_files_uploaded_by_bot(bot, group_id, upload_name)
-            deleted.extend({"group_id": group_id, "name": name} for name in deleted_names)
+            deleted_names = await delete_same_named_group_files_uploaded_by_bot(
+                bot, group_id, upload_name, folder_id=artifact.folder_id
+            )
+            deleted.extend(
+                {"group_id": group_id, "folder_id": artifact.folder_id, "name": name} for name in deleted_names
+            )
 
             upload_result = await bot.call_api(
                 "upload_group_file",
                 group_id=group_id,
                 file=str(package_path),
                 name=upload_name,
+                **({"folder_id": artifact.folder_id} if artifact.folder_id else {}),
             )
             reply_message_id = _extract_message_id(upload_result)
             if not reply_message_id:
@@ -179,6 +199,7 @@ async def publish_local_artifacts(
             uploaded.append(
                 {
                     "group_id": group_id,
+                    "folder_id": artifact.folder_id,
                     "file": str(package_path),
                     "name": upload_name,
                     "sha256": actual_sha256,
@@ -202,7 +223,7 @@ async def publish_local_artifacts(
             item["notice_message_id"] = notice_id
             save_last_local_artifact_published_sha(
                 group_id, item["name"], item["content_sha256"],
-                data_root=data_root,
+                data_root=data_root, folder_id=item["folder_id"],
             )
     return LocalArtifactPublishResult(uploaded=uploaded, deleted=deleted, skipped=skipped)
 
@@ -238,8 +259,13 @@ async def delete_same_named_group_files_uploaded_by_bot(
     bot: Any,
     group_id: int,
     file_name: str,
+    *,
+    folder_id: str = "",
 ) -> list[str]:
-    payload = await bot.call_api("get_group_root_files", group_id=group_id)
+    if folder_id:
+        payload = await bot.call_api("get_group_files_by_folder", group_id=group_id, folder_id=folder_id)
+    else:
+        payload = await bot.call_api("get_group_root_files", group_id=group_id)
     files = _extract_group_files(payload)
     deleted: list[str] = []
     self_id = str(getattr(bot, "self_id", ""))
@@ -324,11 +350,13 @@ def is_same_as_last_local_artifact_published(
     sha256: str,
     *,
     data_root: str | Path | None = None,
+    folder_id: str = "",
 ) -> bool:
     return bool(sha256) and _load_last_local_artifact_published_sha(
         group_id,
         file_name,
         data_root=data_root,
+        folder_id=folder_id,
     ) == sha256
 
 
@@ -338,14 +366,15 @@ def save_last_local_artifact_published_sha(
     sha256: str,
     *,
     data_root: str | Path | None = None,
+    folder_id: str = "",
 ) -> None:
     if not sha256:
         return
-    path = _last_local_artifact_published_sha_path(group_id, file_name, data_root=data_root)
+    path = _last_local_artifact_published_sha_path(group_id, file_name, data_root=data_root, folder_id=folder_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
-            {"name": file_name, "server_content_sha256": sha256, "content_sha256": sha256},
+            {"name": file_name, "folder_id": folder_id, "server_content_sha256": sha256, "content_sha256": sha256},
             ensure_ascii=False,
             indent=2,
         ),
@@ -692,15 +721,16 @@ def _load_last_local_artifact_published_sha(
     file_name: str,
     *,
     data_root: str | Path | None = None,
+    folder_id: str = "",
 ) -> str:
-    path = _last_local_artifact_published_sha_path(group_id, file_name, data_root=data_root)
+    path = _last_local_artifact_published_sha_path(group_id, file_name, data_root=data_root, folder_id=folder_id)
     if not path.is_file():
         return ""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return ""
-    if payload.get("name") != file_name:
+    if payload.get("name") != file_name or payload.get("folder_id", "") != folder_id:
         return ""
     sha256 = payload.get("server_content_sha256") or payload.get("content_sha256") or payload.get("sha256")
     return sha256.strip().lower() if isinstance(sha256, str) else ""
@@ -711,12 +741,17 @@ def _last_local_artifact_published_sha_path(
     file_name: str,
     *,
     data_root: str | Path | None = None,
+    folder_id: str = "",
 ) -> Path:
     if data_root is None:
         raise ValueError("data_root is required")
     root = normalize_local_path(data_root)
     name_key = hashlib.sha256(file_name.encode("utf-8")).hexdigest()
-    return root / "local_artifacts" / str(group_id) / f"{name_key}.json"
+    directory = root / "local_artifacts" / str(group_id)
+    if folder_id:
+        # Keep legacy root records in place; never use a remote ID as a filesystem path.
+        directory = directory / "folders" / hashlib.sha256(folder_id.encode("utf-8")).hexdigest()
+    return directory / f"{name_key}.json"
 
 
 def _run_git(repo_path: Path, *args: str) -> str:

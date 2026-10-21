@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import os
@@ -10,6 +11,8 @@ from typing import Any
 from aiohttp import web
 from astrbot.api import logger
 from astrbot.api.star import Context, Star, register
+
+from .shapez_mods import ShapezModPublisher
 
 
 LOCAL_ARTIFACT_PUBLISH_MAX_AGE_SECONDS = 5 * 60
@@ -42,10 +45,17 @@ class LocalArtifactApiPlugin(Star):
         self._context = context
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
+        self._mod_publisher = ShapezModPublisher(
+            self._call_mod_api, str(os.environ.get("QQBOT_ASTRBOT_ACCOUNT") or ""), get_qqbot_runtime_root()
+        )
 
     async def initialize(self) -> None:
         app = web.Application()
         app.router.add_post("/admin/api/artifacts/publish-local", self._publish_local)
+        app.router.add_post("/admin/api/artifacts/shapez1-mods", self._sync_shapez_mod)
+        app.router.add_get("/admin/api/artifacts/group-folders", self._group_folders)
+        app.router.add_get("/admin/api/artifacts/group-files", self._group_files)
+        app.router.add_post("/admin/api/artifacts/group-folders", self._group_folders)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, HOST, PORT)
@@ -82,6 +92,105 @@ class LocalArtifactApiPlugin(Star):
             logger.exception("[LocalArtifactApi] publish-local failed: %s", exc)
             return web.json_response({"detail": str(exc)}, status=500)
         return web.json_response(result)
+
+    async def _sync_shapez_mod(self, request: web.Request) -> web.Response:
+        """Sync one locally verified mod through the fixed group-folder contract."""
+        if request.remote not in {"127.0.0.1", "::1", "localhost"}:
+            return web.json_response({"detail": "Local request required."}, status=403)
+        try:
+            result = await self._mod_publisher.sync(await request.json())
+        except (ValueError, OSError) as exc:
+            return web.json_response({"detail": str(exc)}, status=400)
+        except Exception as exc:
+            logger.warning("[LocalArtifactApi] shapez1-mods failed: %s", type(exc).__name__)
+            return web.json_response({"detail": str(exc)}, status=502)
+        return web.json_response({"ok": True, **result})
+
+    async def _call_mod_api(self, action: str, **params: Any) -> Any:
+        """Resolve the live OneBot connection for each mod file operation."""
+        return await self._get_onebot_api().call_api(action, **params)
+
+    async def _group_files(self, request: web.Request) -> web.Response:
+        """Read destination file metadata so an interrupted delivery can be reconciled."""
+        if request.remote not in {"127.0.0.1", "::1", "localhost"}:
+            return web.json_response({"detail": "Local request required."}, status=403)
+        try:
+            group_id = int(request.query.get("group_id", ""))
+            folder_id = request.query.get("folder_id", "").strip()
+            if group_id <= 0 or len(folder_id) > 256 or any(ord(char) < 32 for char in folder_id):
+                raise ValueError
+        except ValueError:
+            return web.json_response({"detail": "Invalid group or folder ID."}, status=400)
+        if folder_id == "/":
+            folder_id = ""
+        try:
+            params = {"group_id": group_id}
+            if folder_id:
+                params["folder_id"] = folder_id
+            payload = await asyncio.wait_for(self._get_onebot_api().call_api(
+                "get_group_files_by_folder" if folder_id else "get_group_root_files", **params
+            ), timeout=30)
+            files = payload.get("files") if isinstance(payload, dict) else None
+            if not isinstance(files, list):
+                raise ValueError("OneBot did not return a file list.")
+            result = [{key: item.get(key) for key in ("file_id", "file_name", "file_size")} for item in files]
+        except Exception as exc:
+            logger.warning("[LocalArtifactApi] group-files failed: %s", type(exc).__name__)
+            return web.json_response({"detail": "Group file lookup failed."}, status=502)
+        return web.json_response({"group_id": group_id, "folder_id": folder_id, "files": result})
+
+    async def _group_folders(self, request: web.Request) -> web.Response:
+        """List folders or explicitly create/reuse one named destination for a local publisher."""
+        if request.remote not in {"127.0.0.1", "::1", "localhost"}:
+            return web.json_response({"detail": "Local request required."}, status=403)
+        folder_name = None
+        try:
+            if request.method == "POST":
+                body = await request.json()
+                if not isinstance(body, dict):
+                    raise ValueError
+                folder_name = body.get("folder_name")
+                if (not isinstance(folder_name, str) or not folder_name.strip()
+                        or len(folder_name) > 100 or any(ord(char) < 32 for char in folder_name)):
+                    raise ValueError
+                folder_name = folder_name.strip()
+                raw_group_id = body.get("group_id", "")
+            else:
+                raw_group_id = request.query.get("group_id", "")
+            group_id = int(raw_group_id)
+            if group_id <= 0 or isinstance(raw_group_id, bool):
+                raise ValueError
+        except (ValueError, TypeError):
+            return web.json_response({"detail": "Positive group_id and valid folder_name required."}, status=400)
+        try:
+            bot = self._get_onebot_api()
+            folders = await self._read_group_folders(bot, group_id)
+            if folder_name is not None:
+                matches = [item for item in folders if item["folder_name"] == folder_name]
+                if not matches:
+                    await asyncio.wait_for(bot.call_api(
+                        "create_group_file_folder", group_id=group_id, folder_name=folder_name
+                    ), timeout=30)
+                    folders = await self._read_group_folders(bot, group_id)
+                    matches = [item for item in folders if item["folder_name"] == folder_name]
+                if len(matches) != 1:
+                    raise HttpError(409, "Cannot uniquely resolve the requested folder; inspect group folders.")
+                folders = matches
+        except HttpError as exc:
+            return web.json_response({"detail": exc.detail}, status=exc.status)
+        except Exception as exc:
+            logger.warning("[LocalArtifactApi] group-folders failed: %s", type(exc).__name__)
+            return web.json_response({"detail": "Group folder operation failed; query before retrying."}, status=502)
+        return web.json_response({"group_id": group_id, "folders": folders})
+
+    async def _read_group_folders(self, bot: "AstrBotPlatformOneBotApi", group_id: int) -> list[dict[str, str]]:
+        """Read folder metadata without exposing group-file contents."""
+        payload = await asyncio.wait_for(bot.call_api("get_group_root_files", group_id=group_id), timeout=30)
+        folders = payload.get("folders") if isinstance(payload, dict) else None
+        if not isinstance(folders, list):
+            raise HttpError(502, "OneBot did not return a folder list.")
+        return [{"folder_id": str(item["folder_id"]), "folder_name": str(item["folder_name"])} for item in folders]
+
 
     def _get_onebot_api(self) -> "AstrBotPlatformOneBotApi":
         self_id = str(os.environ.get("QQBOT_ASTRBOT_ACCOUNT") or "").strip()
@@ -156,6 +265,12 @@ def _build_local_artifact_publish_file(payload: dict[str, Any], repo_path: Path)
             targets.append(group_id)
     if not targets:
         raise HttpError(400, "Artifact targets must include at least one valid group id.")
+    folder_id = payload.get("folder_id", "")
+    if not isinstance(folder_id, str) or len(folder_id) > 256 or any(ord(char) < 32 for char in folder_id):
+        raise HttpError(400, "Artifact folder_id must be a QQ folder id string.")
+    folder_id = folder_id.strip()
+    if folder_id == "/":
+        folder_id = ""
     artifact = _validate_generic_local_artifact_path(str(payload.get("path") or ""), repo_path)
     return LocalArtifactPublishFile(
         path=artifact,
@@ -164,6 +279,7 @@ def _build_local_artifact_publish_file(payload: dict[str, Any], repo_path: Path)
         sha256=str(payload.get("sha256") or "").strip(),
         content_sha256=str(payload.get("content_sha256") or "").strip(),
         message=str(payload.get("message") or "").strip(),
+        folder_id=folder_id,
     )
 
 
