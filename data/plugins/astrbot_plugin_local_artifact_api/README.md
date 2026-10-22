@@ -39,7 +39,7 @@
 
 `POST /admin/api/artifacts/shapez1-mods` 由 ShapezToolkit 的 `mods update` / `mods publish` 调用，只接受本机请求。目标固定为群 `1163635014` 的现有文件夹 `s1-MOD-官方模组网站`，按名称唯一解析，不创建目录或回退群根目录。
 
-当前包请求包含 `id`（模组 ID）、`file_id`（mod.io 文件 ID）、`path`、`name`（模组名_版本.zip）和 `sha256`；文件必须位于 `D:/project/shapez/ShapezToolkit/data/shapez1/mods/downloads`，最大 64 MiB。废弃请求为 `{"id": 模组ID, "retired": true}`。成功响应包含 `ok`、模组和目标标识、`uploaded`、`skipped`、`deleted` 数量。
+当前包请求包含 `id`（模组 ID）、`file_id`（mod.io 文件 ID）、`path`、`name`（模组名_版本.zip）和 `sha256`；文件必须位于 `D:/project/shapez/ShapezToolkit/shapez1_mods/data/downloads`，最大 64 MiB。废弃请求为 `{"id": 模组ID, "retired": true}`。成功响应包含 `ok`、模组和目标标识、`uploaded`、`skipped`、`deleted` 数量。
 
 `shapez_mods.ShapezModPublisher` 独立核对本地文件哈希，并保存按账号、群、文件夹和模组 ID 隔离的 `shapez1_mods` 状态。每次查询显式读取最多 10000 个目录项，达到上限则停止。NapCat 的列表文件 ID 是临时缓存值，长期记录使用名称、大小、上传时间及上传账号组成的唯一特征。上传前保存目录基线并核对本地 SHA-256，将已校验的字节交给协议端；取得上传成功回执后，新版须唯一匹配新增条目的名称、大小和上传账号，之后才删除已跟踪的旧文件。删除使用当前查询的临时 ID，并重新查询确认结果；首次不会接管人工文件。上传不确定时保留 pending；有成功回执时重跑继续确认，没有成功回执时须核对现场，不能盲目重传。删除失败保留待删除记录。插件不发送额外公告，现有构建发布接口保持独立。
 
