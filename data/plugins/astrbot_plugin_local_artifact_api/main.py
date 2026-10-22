@@ -55,6 +55,7 @@ class LocalArtifactApiPlugin(Star):
         app.router.add_post("/admin/api/artifacts/shapez1-mods", self._sync_shapez_mod)
         app.router.add_get("/admin/api/artifacts/group-folders", self._group_folders)
         app.router.add_get("/admin/api/artifacts/group-files", self._group_files)
+        app.router.add_post("/admin/api/artifacts/group-file-download", self._group_file_download)
         app.router.add_post("/admin/api/artifacts/group-folders", self._group_folders)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -124,7 +125,7 @@ class LocalArtifactApiPlugin(Star):
         if folder_id == "/":
             folder_id = ""
         try:
-            params = {"group_id": group_id}
+            params = {"group_id": group_id, "file_count": 10000}
             if folder_id:
                 params["folder_id"] = folder_id
             payload = await asyncio.wait_for(self._get_onebot_api().call_api(
@@ -133,11 +134,49 @@ class LocalArtifactApiPlugin(Star):
             files = payload.get("files") if isinstance(payload, dict) else None
             if not isinstance(files, list):
                 raise ValueError("OneBot did not return a file list.")
+            if len(files) >= 10000:
+                return web.json_response({"detail": "Group file listing reached its limit; narrow the folder."}, status=502)
             result = [{key: item.get(key) for key in ("file_id", "file_name", "file_size")} for item in files]
         except Exception as exc:
             logger.warning("[LocalArtifactApi] group-files failed: %s", type(exc).__name__)
             return web.json_response({"detail": "Group file lookup failed."}, status=502)
         return web.json_response({"group_id": group_id, "folder_id": folder_id, "files": result})
+
+    async def _group_file_download(self, request: web.Request) -> web.Response:
+        """Download a freshly listed group file into NapCat's local cache.
+
+        Args:
+            request: Local JSON containing a 32-character hexadecimal file_id.
+
+        Returns:
+            NapCat's local file path, or an explicit validation/upstream error.
+        """
+        if request.remote not in {"127.0.0.1", "::1", "localhost"}:
+            return web.json_response({"detail": "Local request required."}, status=403)
+        try:
+            body = await request.json()
+            file_id = body.get("file_id") if isinstance(body, dict) else None
+            # Accept listed opaque IDs only; get_file also accepts arbitrary paths and URLs.
+            if not isinstance(file_id, str) or len(file_id) != 32 or any(char not in "0123456789abcdefABCDEF" for char in file_id):
+                raise ValueError
+        except (ValueError, TypeError):
+            return web.json_response({"detail": "A freshly listed 32-character hexadecimal file_id is required."}, status=400)
+        try:
+            payload = await asyncio.wait_for(self._get_onebot_api().call_api(
+                "get_file", file_id=file_id
+            ), timeout=900)
+            file_path = payload.get("file") if isinstance(payload, dict) else None
+            if not isinstance(file_path, str) or not file_path.strip():
+                raise ValueError("OneBot did not return a local file path.")
+        except asyncio.TimeoutError:
+            return web.json_response({"detail": "Group file download timed out; inspect the local cache before retrying."}, status=504)
+        except Exception as exc:
+            logger.warning("[LocalArtifactApi] group-file-download failed: %s", type(exc).__name__)
+            return web.json_response({"detail": "Group file download failed; refresh the file list."}, status=502)
+        return web.json_response(
+            {"file_id": file_id, "file_path": file_path},
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def _group_folders(self, request: web.Request) -> web.Response:
         """List folders or explicitly create/reuse one named destination for a local publisher."""
