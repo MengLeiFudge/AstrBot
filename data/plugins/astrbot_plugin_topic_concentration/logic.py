@@ -20,6 +20,9 @@ ACTIVATION_WINDOW_SECONDS = 180.0
 CANDIDATE_MAX_WAIT_SECONDS = 30.0
 SKIP_REPLY_MARKER = "[[QQBOT_SKIP_REPLY]]"
 DEACTIVATE_MARKER = "[[QQBOT_DEACTIVATE]]"
+# Model output can replace a leading Q with Unicode replacement characters.
+# Keep the BOT prefix, action and brackets exact to avoid matching ordinary text.
+REPLY_CONTROL_RE = re.compile(r"\[\[[Q\ufffd]{2,6}BOT_(SKIP_REPLY|DEACTIVATE)\]\]")
 POKE_BURST_WINDOW_SECONDS = 60.0
 POKE_BURST_MAX_TIMESTAMPS = 16
 POKE_MUTE_MIN_POKES = 9
@@ -770,10 +773,19 @@ def build_group_activation_instruction(
 
 
 def parse_reply_control(text: str) -> ReplyControlDecision:
+    """Consume control markers, including damaged leading Q characters.
+
+    Args:
+        text: Assistant reply or assistant history text.
+
+    Returns:
+        Visible text and the requested skip/deactivation actions.
+    """
     raw = strip_internal_prompt_echo(text)
-    skip_reply = SKIP_REPLY_MARKER in raw
-    deactivate = DEACTIVATE_MARKER in raw
-    cleaned = raw.replace(SKIP_REPLY_MARKER, "").replace(DEACTIVATE_MARKER, "")
+    actions = set(REPLY_CONTROL_RE.findall(raw))
+    skip_reply = "SKIP_REPLY" in actions
+    deactivate = "DEACTIVATE" in actions
+    cleaned = REPLY_CONTROL_RE.sub("", raw)
     cleaned = re.sub(r"[ \t]+\n", "\n", cleaned).strip()
     if not any(char.isalnum() for char in cleaned):
         cleaned = ""

@@ -19,6 +19,7 @@ from .logic import POKE_BACK_TOOL_NAME
 from .logic import POKE_MUTE_TOOL_NAME
 from .logic import POKE_STATE_ARMED
 from .logic import POKE_STATE_MUTE
+from .logic import REPLY_CONTROL_RE
 from .logic import SKIP_REPLY_MARKER
 from .logic import activate_group_chat
 from .logic import build_call_intent_prompt
@@ -334,6 +335,32 @@ class TopicConcentrationPlugin(Star):
         if route == ROUTE_CANDIDATE and not _candidate_request_is_current(event):
             _stop_stale_candidate(event, stage="provider")
             return
+        # Clean persisted assistant markers before the model can imitate them.
+        # Preserve user messages, non-text parts and tool-call/result pairing.
+        for index in range(len(req.contexts) - 1, -1, -1):
+            message = req.contexts[index]
+            if message.get("role") != "assistant":
+                continue
+            content = message.get("content")
+            changed = False
+            if isinstance(content, str) and REPLY_CONTROL_RE.search(content):
+                message["content"] = parse_reply_control(content).cleaned_text
+                changed = True
+            elif isinstance(content, list):
+                parts = []
+                for part in content:
+                    text = part.get("text") if isinstance(part, dict) else None
+                    if isinstance(text, str) and REPLY_CONTROL_RE.search(text):
+                        text = parse_reply_control(text).cleaned_text
+                        changed = True
+                        if not text:
+                            continue
+                        part = {**part, "text": text}
+                    parts.append(part)
+                if changed:
+                    message["content"] = parts
+            if changed and not message["content"] and not message.get("tool_calls"):
+                req.contexts.pop(index)
         is_poke = bool(event.get_extra(POKE_INTERACTION_EXTRA, ""))
         if route in {ROUTE_EXPLICIT, ROUTE_CANDIDATE} and not is_poke:
             renewals = int(event.get_extra(ACTIVATION_RENEWALS_EXTRA, 0) or 0)
