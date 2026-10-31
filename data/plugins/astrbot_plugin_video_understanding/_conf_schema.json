@@ -1,0 +1,8 @@
+{
+  "enabled": {
+    "description": "启用视频分镜理解",
+    "type": "bool",
+    "default": true,
+    "hint": "普通聊天触发时处理当前视频链接或附件，下载上限80 MiB、10分钟；复用当前识图模型。"
+  }
+}
