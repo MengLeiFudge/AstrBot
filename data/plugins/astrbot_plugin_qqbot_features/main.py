@@ -252,7 +252,7 @@ FEATURES: tuple[FeatureSpec, ...] = (
         aliases=("好友申请", "邀请入群", "社交事件"),
         status="已移植",
         lines=(
-            "收到好友申请或入群邀请时按配置自动同意，并记录处理结果",
+            "收到好友申请、入群邀请或成员加群申请时按配置自动同意，并记录处理结果",
             "机器人自身入群后私聊通知邀请者，群内不发自报消息",
         ),
     ),
@@ -2227,7 +2227,7 @@ class QQBotFeaturesPlugin(Star):
         yield event.plain_result(text)
 
     @filter.platform_adapter_type("aiocqhttp")
-    @filter.event_message_type(EventMessageType.ALL, desc="OneBot 社交事件监听器，处理好友申请、邀请入群、自身入群私聊通知和新成员欢迎。")
+    @filter.event_message_type(EventMessageType.ALL, desc="OneBot 社交事件监听器，处理好友申请、群请求、自身入群私聊通知和新成员欢迎。")
     async def onebot_social_events(self, event: AstrMessageEvent):
         raw = _raw_event_dict(event)
         if not raw:
@@ -2269,6 +2269,7 @@ class QQBotFeaturesPlugin(Star):
                 )
             return
     async def _handle_onebot_request(self, event: AstrMessageEvent, raw: dict) -> None:
+        """Approve friend requests, group invitations and membership applications."""
         request_type = str(raw.get("request_type") or "")
         sub_type = str(raw.get("sub_type") or "")
         user_id = str(raw.get("user_id") or "")
@@ -2289,10 +2290,10 @@ class QQBotFeaturesPlugin(Star):
                 flag=flag,
             )
             return
-        if request_type == "group" and sub_type == "invite":
+        if request_type == "group" and sub_type in {"add", "invite"}:
             if not self._auto_approve_group_invites:
                 logger.info(
-                    "[QQBotFeatures] group invite request observed: group_id=%s user_id=%s",
+                    "[QQBotFeatures] group request observed: group_id=%s user_id=%s",
                     group_id,
                     user_id,
                 )
@@ -2301,13 +2302,13 @@ class QQBotFeaturesPlugin(Star):
                 event,
                 action="set_group_add_request",
                 payload={"flag": flag, "sub_type": sub_type, "approve": True},
-                log_label="group invite request",
+                log_label="group request",
                 group_id=group_id,
                 user_id=user_id,
                 sub_type=sub_type,
                 flag=flag,
             )
-            if approved and group_id and user_id:
+            if approved and sub_type == "invite" and group_id and user_id:
                 self._group_inviter_by_group_id[group_id] = user_id
 
     async def _approve_onebot_request(

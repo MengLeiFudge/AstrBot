@@ -6,10 +6,10 @@
     "hint": "收到 OneBot friend request 后调用 set_friend_add_request。"
   },
   "auto_approve_group_invites": {
-    "description": "自动同意邀请入群",
+    "description": "自动同意群邀请和加群申请",
     "type": "bool",
     "default": true,
-    "hint": "只处理 request_type=group 且 sub_type=invite 的邀请入群事件，不处理普通加群申请。"
+    "hint": "收到 request_type=group 且 sub_type 为 invite 或 add 时调用 set_group_add_request；包含邀请机器人入群和成员加群申请。"
   },
   "data_root": {
     "description": "生图积分存储根目录",

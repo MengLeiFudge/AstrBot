@@ -36,8 +36,8 @@
   - 扫描超过一周的外层群文件并通知处理。
 - 好友申请
   - 按配置自动同意 OneBot 好友申请。
-- 邀请入群
-  - 按配置自动同意 OneBot 邀请入群请求。
+- 群邀请与加群申请
+  - 按配置自动同意 OneBot 邀请机器人入群和成员加群申请。
   - 机器人自身入群成功后优先私聊通知邀请者，文案包含群名和群号。
 - 新成员入群欢迎
   - 云栖随机选择以“群地位”开头、表达群地位变量减 1 的完整表达式欢迎新成员。
@@ -199,7 +199,7 @@
 - `auto_approve_friend_requests`
   - 是否自动同意好友申请，默认开启。
 - `auto_approve_group_invites`
-  - 是否自动同意邀请入群，默认开启。
+  - 是否自动同意邀请机器人入群和成员加群申请，默认开启。
 - `sub2api_base_url`
   - Sub2API 根地址，例如 `https://ai.example.com`。插件会显式直连该地址，不继承 Windows WinINET 或 urllib 系统代理。
 - `sub2api_admin_api_key`
