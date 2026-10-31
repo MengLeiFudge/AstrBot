@@ -103,6 +103,9 @@
 - 复读
   - 群里连续出现相同纯文本消息时概率复读，并带冷却。
 - 表情管理
+  - 默认后台筛选当前消息附件，识图模型判断值得收藏后归入现有启用分类，并按图片内容去重；收藏结果可直接用于后续本地选图。
+  - 默认每 60 秒最多分析一张图片，同时只运行一个收藏任务；单张上限 5 MiB、2000 万像素和 300 帧，图库达到 1000 张后停止自动收集，已有图片和手动管理保留。
+  - 使用 AstrBot 已配置的图片转述模型，未指定时使用当前会话模型；后台任务限时 60 秒，失败写日志，原消息继续处理。
   - `表情管理`
     - 查看当前图库分类。
   - `表情管理 开启管理后台`
@@ -112,7 +115,7 @@
   - `表情管理 清空指定类型 [类别]` / `表情管理 删除类型本身 [类别]` / `表情管理 清空全部`
     - 主人或机器人自身限定，执行前需要同一发送者二次确认。
   - 本地图片和索引继续使用 `data\plugin_data\meme_manager\`；配置入口在本插件配置里使用 `meme_manager_` 前缀，不再读取旧 `meme_manager_config.json`。
-  - 普通 LLM 附表情不要求 WebUI 依赖；上传图片需要 `aiohttp` 和 `pillow`，管理后台需要 `quart` 和 `hypercorn`，Cloudflare R2 图床同步需要 `boto3` 和 `botocore`。
+  - 自动收藏和上传图片使用已有 `aiohttp`、`pillow` 依赖；管理后台需要 `quart` 和 `hypercorn`，Cloudflare R2 图床同步需要 `boto3` 和 `botocore`。
 
 ## 养鲲
 
@@ -238,6 +241,10 @@
   - 默认 10 GiB，范围 1-100 GiB；超限按 `metadata.json` 的最后访问时间淘汰。
 - `source_knowledge_max_results` / `source_knowledge_max_chars`
   - 默认 `4` / `2600`。源码知识按低成本运行，需要追查大文件或更完整源码证据时再临时调高。
+- `meme_manager_auto_collect_enabled`
+  - 默认开启，后台判断并收藏适合聊天复用的表情包到本地图库。
+- `meme_manager_auto_collect_interval_seconds` / `meme_manager_auto_collect_max_images`
+  - 默认最短分析间隔 60 秒、图库总量上限 1000 张；最短间隔不能低于 5 秒。
 - `meme_manager_webui_port`
   - 表情管理后台端口，默认 5000；后台只通过 `表情管理 开启管理后台` 启动。
 - `meme_manager_enable_mixed_message`

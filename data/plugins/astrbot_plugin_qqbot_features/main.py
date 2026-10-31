@@ -1056,6 +1056,16 @@ class QQBotFeaturesPlugin(Star):
             yield result
         event.stop_event()
 
+    @filter.event_message_type(EventMessageType.ALL, priority=800, desc="后台筛选当前消息图片并收藏到本地表情图库。")
+    async def meme_manager_collect_images(self, event: AstrMessageEvent):
+        """Observe human attachments without delaying or consuming their message."""
+        if _raw_event_dict(event).get("post_type") != "message" or is_known_bot_sender(event):
+            return
+        upload_key = f"{event.session_id}_{event.get_sender_id()}"
+        if upload_key in self._meme_runtime.upload_states:
+            return
+        self._meme_runtime.auto_collector.consider(event)
+
     @filter.event_message_type(EventMessageType.ALL, desc="表情管理添加表情后的图片上传等待入口。")
     async def meme_manager_upload_image(self, event: AstrMessageEvent):
         handled = False

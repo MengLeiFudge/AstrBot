@@ -167,6 +167,24 @@
     "default": 5000,
     "hint": "限制单次后台去重最多处理的候选文件数，避免 temp 文件过多时长时间占用磁盘 IO。"
   },
+  "meme_manager_auto_collect_enabled": {
+    "description": "自动收藏本地表情",
+    "type": "bool",
+    "default": true,
+    "hint": "后台使用已配置的图片转述模型筛选当前消息附件，按现有启用分类写入本地图库；未指定图片模型时使用当前会话模型。"
+  },
+  "meme_manager_auto_collect_interval_seconds": {
+    "description": "自动收藏分析间隔（秒）",
+    "type": "int",
+    "default": 60,
+    "hint": "两次后台图片分析的最短间隔，最低 5 秒；同时只处理一张图片。"
+  },
+  "meme_manager_auto_collect_max_images": {
+    "description": "自动收藏图库总量上限",
+    "type": "int",
+    "default": 1000,
+    "hint": "本地图库达到此图片总数后停止自动收集，保留已有图片和手动管理功能。单张自动收集图片上限为 5 MiB、2000 万像素和 300 帧。"
+  },
   "meme_manager_webui_port": {
     "description": "表情管理后台端口",
     "type": "int",
