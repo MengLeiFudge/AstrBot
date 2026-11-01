@@ -1,4 +1,4 @@
 aiohttp>=3.8
-Pillow>=11.3,<13
-yt-dlp>=2025.10.14
+curl_cffi>=0.13,<0.17
+yt-dlp>=2026.10.26
 ffmpeg-binaries==1.1.0
