@@ -2,13 +2,13 @@
 
 在正常聊天中发送可公开访问的视频链接，或发送带下载地址的 QQ 视频附件。插件使用 [DSH Video Storyboard](https://github.com/SAOS-3624/dsh-video-storyboard) 扫描镜头变化，抽取代表帧，按切换密度排版分镜图。主聊天模型直接接收分镜原图、逐格时间清单及可用字幕。聊天触发规则沿用既有配置。
 
-支持 B站长链、b23 短链、YouTube、抖音、小红书、微博、腾讯视频、西瓜等域名，以及 HTTP/HTTPS 视频文件直链。网页解析由 yt-dlp 提供；登录限制或站点风控可能阻止下载，失败会在当前请求中标注实际原因。
+支持 B站长链、b23 短链、YouTube、X/Twitter、抖音、小红书、微博、腾讯视频、西瓜等域名，以及 HTTP/HTTPS 视频文件直链。网页解析由 yt-dlp 提供；登录限制或站点风控可能阻止下载，失败会在当前请求中标注实际原因。
 
 ## 安装与配置
 
 在 AstrBot 的虚拟环境安装本目录 `requirements.txt`，并安装 Node.js 20 或更新版本。FFmpeg 和 ffprobe 来自 `ffmpeg-binaries`，也可放入本插件的 `tools/ffmpeg/bin/` 或加入 PATH。`tools/` 中的本机二进制不进 Git。分镜引擎源码随插件提供，无需安装 DSH 应用。
 
-`_conf_schema.json` 的 `enabled` 默认开启。当前会话的主聊天模型必须支持图片输入。B站下载使用直连；其他视频站点复用本机 HTTP/HTTPS 代理。网页下载通过 curl_cffi 提供浏览器 TLS，并保持证书校验。
+`_conf_schema.json` 的 `enabled` 默认开启。当前会话的主聊天模型必须支持图片输入。B站下载使用直连；X/Twitter和其他视频站点复用本机 HTTP/HTTPS 代理。X/Twitter使用公开帖子的嵌入信息解析视频，该接口可能不提供帖子的全部媒体或元数据。网页下载通过 curl_cffi 提供浏览器 TLS，并保持证书校验。
 
 ## 处理边界
 
