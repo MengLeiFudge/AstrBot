@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import Json, Plain, Video
+from astrbot.api.message_components import Forward, Json, Node, Nodes, Plain, Video
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools, register
 
-from .video_reader import VIDEO_CAPABILITY, VideoError, VideoOverview, VideoReader, VideoSource, find_video_sources
+from .video_reader import TOTAL_TIMEOUT, VIDEO_CAPABILITY, VideoError, VideoOverview, VideoReader, VideoSource, find_video_sources
+from .video_media import resolve_qq_video
 
 
-@register("astrbot_plugin_video_understanding", "MengLei", "用DSH分镜图和时间清单理解视频。", "1.1.0")
+@register("astrbot_plugin_video_understanding", "MengLei", "读取DSH视频分镜和画面字幕。", "1.2.0")
 class VideoUnderstandingPlugin(Star):
     """Give the main chat model actual frames through public request hooks."""
 
@@ -49,6 +51,8 @@ class VideoUnderstandingPlugin(Star):
         sources = []
         components = event.get_messages()
         replaced = False
+        if any(isinstance(component, (Forward, Node, Nodes)) for component in components):
+            event.set_extra("qqbot_video_resolve_native", True)
         for index, component in enumerate(components):
             if not isinstance(component, Video):
                 continue
@@ -59,7 +63,7 @@ class VideoUnderstandingPlugin(Star):
             replaced = True
         if replaced:
             if not sources:
-                event.set_extra("qqbot_video_result", "[视频未读取] 当前附件没有可用下载地址，请改发视频链接或重新发送原视频。不能声称已经看过。")
+                event.set_extra("qqbot_video_resolve_native", True)
             event.set_extra("qqbot_video_native_sources", sources)
             event.message_str = (event.message_str + "\n[视频]").strip()
             event.message_obj.message_str = event.message_str
@@ -76,6 +80,7 @@ class VideoUnderstandingPlugin(Star):
             return
         if self._reader.tools_ready and VIDEO_CAPABILITY not in (req.system_prompt or ""):
             req.system_prompt = (req.system_prompt or "") + "\n" + VIDEO_CAPABILITY
+        deadline = asyncio.get_running_loop().time() + TOTAL_TIMEOUT
         stored = event.get_extra("qqbot_video_native_sources")
         sources = [source for source in stored if isinstance(source, VideoSource)] if isinstance(stored, list) else []
         text = []
@@ -87,11 +92,49 @@ class VideoUnderstandingPlugin(Star):
         if not sources:
             sources = find_video_sources("\n".join(text))
         result = event.get_extra("qqbot_video_result")
+        if result is None and not sources and event.get_extra("qqbot_video_resolve_native", False):
+            try:
+                bot = getattr(event, "bot", None)
+                call_action = getattr(bot, "call_action", None)
+                if not callable(call_action):
+                    raise VideoError("当前平台无法读取QQ原视频消息")
+
+                async def call(name: str, version: str = "1", **params):
+                    """Adapt a public adapter API call to the OneBot client.
+
+                    Args:
+                        name: Adapter API name whose final component is the action.
+                        version: Adapter protocol version, unused by OneBot.
+                        **params: Structured original-message query arguments.
+
+                    Returns:
+                        The public OneBot action result.
+                    """
+                    if set(params) == {"params"} and isinstance(params["params"], dict):
+                        params = params["params"]
+                    return await call_action(name.rsplit(".", 1)[-1], **params)
+
+                source_message = {
+                    "message_id": str(event.message_obj.message_id),
+                    "message_info": {
+                        "user_info": {"user_id": str(event.get_sender_id())},
+                        "group_info": {"group_id": str(event.get_group_id())} if event.get_group_id() else None,
+                    },
+                }
+                async with asyncio.timeout(min(15, max(0.01, deadline - asyncio.get_running_loop().time()))):
+                    native = await resolve_qq_video(call, source_message)
+                if native is not None:
+                    sources.append(native)
+            except Exception as exc:
+                result = f"[视频未读取] 已收到视频附件或转发记录，但QQ原文件取得失败（{type(exc).__name__}）。请说明文件下载失败，不能说用户没发视频或只发路径，也不能声称已看过。"
+                event.set_extra("qqbot_video_result", result)
+                logger.warning("[VideoUnderstanding] QQ source unavailable: error_type=%s", type(exc).__name__)
         if result is None and not sources:
             return
         if result is None:
             try:
-                result = await self._reader.analyze(sources[0])
+                async with asyncio.timeout(max(0.01, deadline - asyncio.get_running_loop().time())):
+                    result = await self._reader.analyze(sources[0])
             except VideoError as exc:
                 result = f"[视频未读取] {exc}。请明确说明尚未看到视频，不能根据标题或其他图片编造内容。"
                 logger.warning("[VideoUnderstanding] video unavailable: %s", exc)

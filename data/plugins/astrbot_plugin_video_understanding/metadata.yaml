@@ -1,6 +1,6 @@
 name: astrbot_plugin_video_understanding
 display_name: 视频分镜理解
-desc: 下载视频链接或QQ视频附件，用DSH生成分镜原图和时间清单，直接交给聊天模型。
-version: v1.1.0
+desc: 读取视频链接和QQ合并转发视频，提取DSH分镜及带时间戳的画面字幕，直接交给聊天模型。
+version: v1.2.0
 author: MengLei
 repo: ""
