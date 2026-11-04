@@ -16,7 +16,7 @@ from .video_reader import TOTAL_TIMEOUT, VIDEO_CAPABILITY, VideoError, VideoOver
 from .video_media import resolve_qq_video
 
 
-@register("astrbot_plugin_video_understanding", "MengLei", "读取DSH视频分镜和画面字幕。", "1.2.0")
+@register("astrbot_plugin_video_understanding", "MengLei", "读取DSH视频分镜和画面字幕。", "1.2.1")
 class VideoUnderstandingPlugin(Star):
     """Give the main chat model actual frames through public request hooks."""
 
