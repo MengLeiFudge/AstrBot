@@ -249,8 +249,8 @@ class TopicConcentrationPlugin(Star):
             and not event.get_extra("selected_provider")
             and self.context.get_provider_by_id(DEEPSEEK_REPLY_PROVIDER_ID) is not None
         ):
-            # Select reasoning for this direct dialogue only; keep the session's
-            # default provider non-thinking for candidates and background work.
+            # Keep the direct-dialogue profile request-scoped without changing
+            # the session's default model selection.
             provider_id = await self.context.get_current_chat_provider_id(event.unified_msg_origin)
             if provider_id == DEEPSEEK_PROVIDER_ID:
                 event.set_extra("selected_provider", DEEPSEEK_REPLY_PROVIDER_ID)

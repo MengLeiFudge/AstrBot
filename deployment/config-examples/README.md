@@ -26,6 +26,6 @@ python3 scripts/qqbot-maintenance/export-astrbot-config-examples.py
 
 DSP 六个大型模组的唯一向量库由 `astrbot_plugin_dsp_knowledge` 从 `D:/project/dsp` 自动增量维护。新机器还需配置 `openai_embedding`（`qwen3.7-text-embedding`）与 `bailian_rerank`（`qwen3-rerank`）两个 provider；API key 只放真实运行配置。插件只在 `127.0.0.1:8081` 提供共享检索，夜凛不会保存第二份索引。
 
-DeepSeek Responses 默认模型 `deepseek-responses/deepseek-flash` 保持自定义请求体 `{"reasoning":{"effort":"none"}}`，供普通续聊候选、拍一拍、命名意图判断、空回复纠错和上下文压缩使用。在同一 provider source 下另建 ID 为 `deepseek-responses/deepseek-flash-reply` 的模型配置，实际模型仍是 `deepseek-flash`，能力列表与默认模型一致，自定义请求体填写 `{"reasoning":{"effort":"high"},"max_output_tokens":8192}`，无需复制 API key。
+DeepSeek Responses 默认模型 `deepseek-responses/deepseek-flash` 与直接对话模型 `deepseek-responses/deepseek-flash-reply` 统一使用自定义请求体 `{"reasoning":{"effort":"max"},"max_output_tokens":8192}`。两者在同一 provider source 下使用支持视觉的 `deepseek-flash`，能力列表一致，复用现有 API key。普通续聊候选、拍一拍、命名意图判断、空回复纠错和上下文压缩沿用默认模型。
 
-`topic_concentration` 仅为私聊和非拍一拍的显式呼叫选择该回复模型，且只在会话原本使用上述默认模型、事件没有选择其他 provider 时生效；会话默认模型保持不变。8192 为单次推理和正文共享的总输出上限，source 请求超时保持 120 秒；思考档位可能影响延迟和费用，按正常聊天后的实际账单调整。模型路由不会导出到示例，需在本机 WebUI 中配置这两个模型；缺少回复模型时沿用默认模型。
+`topic_concentration` 仅为私聊和非拍一拍的显式呼叫选择回复模型，且只在会话原本使用上述默认模型、事件没有选择其他 provider 时生效；会话默认模型保持不变。两条路径均使用最大思考，8192 为单次推理和正文共享的总输出上限，source 请求超时保持 120 秒。触发条件与重试策略沿用现有配置，按正常聊天后的实际账单观察费用。模型路由不会导出到示例，需在本机 WebUI 中配置这两个模型；缺少回复模型时沿用默认模型。
