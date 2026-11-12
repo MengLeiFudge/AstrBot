@@ -1,0 +1,6 @@
+name: astrbot_plugin_cpa_session
+display_name: CPA 会话透传
+desc: "复用 Responses 客户端，将真实会话标识按请求传给 CPA。"
+version: v0.1.0
+author: MLJ
+repo: ""
