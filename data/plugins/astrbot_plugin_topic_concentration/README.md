@@ -19,8 +19,10 @@
 - 部署配置须将 `provider_ltm_settings.image_caption` 设为 `false`，关闭插件外的被动群图片描述。默认 `deepseek-responses/deepseek-flash` 使用 `{"reasoning":{"effort":"max"},"max_output_tokens":8192}`。
 - 可在同一 provider source 下配置 `deepseek-responses/deepseek-flash-reply`，实际模型仍为 `deepseek-flash`，自定义请求体为 `{"reasoning":{"effort":"max"},"max_output_tokens":8192}`。私聊或非拍一拍的显式呼叫仅在会话使用上述默认模型、且事件没有指定其他 provider 时选择该回复模型；未配置则沿用原模型。候选、拍一拍、命名意图判断、空回复纠错和上下文压缩继续使用默认模型，同样启用最大思考。
 - 8192 是单次推理与正文共享的最大输出预算，source 请求超时为 120 秒；最大思考可能增加回复耗时和输出用量。原生主对话中的必要工具调用沿用原链路，不新增独立规划或自审循环。
-- 非拍一拍显式呼叫必须产生可见回复；首次结果为空或只有控制标记时，使用当前 provider/model 纠错重试一次。
+- 非拍一拍显式呼叫必须产生可见回复；无工具调用的最终结果为空或只有控制标记时，使用当前 provider/model 纠错重试一次。正在调用工具的中间响应继续研究，不触发空回复重试。
 - 候选进入队列时记录激活代际和时间。等待超过 30 秒、激活过期或代际变化时静默丢弃；旧响应不能覆盖后续显式激活或反激活。
+- 新的私聊或显式文字呼叫通过公开 `event.stop_event()` 停止同会话旧拍一拍、候选请求，释放拍一拍 AI 租约；直接呼叫处理期间不加入新的可选请求。不打断先前的直接对话。
+- 普通对话可以先发有用且可靠的公开阶段结论，再继续研究。部署配置 `provider_settings.buffer_intermediate_messages=false`，保留 `display_reasoning_text=false`。本轮起点记录在事件中，功能合集插件只从首条分段等待扣除已处理时间；后续分段和研究补充保持配置速度。
 - 固定命令、生图、菜单、群务、下载和游戏入口由 `astrbot_plugin_qqbot_features` 直接执行，不进入普通 LLM 候选链路。
 - 夜凛、星遥和月澄只作为静态姐妹关系与机器人防回环账号，不是 AstrBot worker。
 
@@ -37,4 +39,4 @@
 
 ## 数据边界
 
-插件只维护群激活、候选代际、拍一拍计数、AI 租约、请求级工具 claim、禁言冷却和 MUTE 窗口等内存状态，不写入数据库，不读取其他账号运行态，也不实现独立 provider fallback。
+插件只维护群激活、候选代际、拍一拍计数、AI 租约、请求级工具 claim、禁言冷却、MUTE 窗口和当前请求的弱引用等内存状态，不写入数据库，不读取其他账号运行态，也不实现独立 provider fallback。

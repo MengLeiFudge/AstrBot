@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from sys import maxsize
 import json
 import os
 from pathlib import Path
@@ -95,6 +96,7 @@ from .rightcodes_draw_rewrite import format_rightcodes_draw_rewrite_missing_cont
 from .rightcodes_draw_rewrite import merge_rewritten_draw_request
 from .rightcodes_draw_rewrite import parse_rightcodes_draw_rewrite_response
 from .rightcodes_draw_rewrite import should_rewrite_rightcodes_draw_prompt
+from .reply_timing import deliver_segmented_result, restore_delivered_result
 from .request_context import build_current_request_context
 from .request_context import collect_source_image_sources
 from .request_context import extract_image_sources
@@ -864,6 +866,14 @@ class QQBotFeaturesPlugin(Star):
             LLM_ERROR_NOTICE_COOLDOWN_SECONDS,
         )
         return True
+
+    @filter.on_decorating_result(priority=-maxsize, desc="首条分段等待扣除已经经过的处理时间。")
+    async def pace_first_reply(self, event: AstrMessageEvent):
+        await deliver_segmented_result(event, self.context)
+
+    @filter.after_message_sent(priority=maxsize, desc="向原有发送后 Hook 还原已发送的消息内容。")
+    async def restore_paced_reply(self, event: AstrMessageEvent):
+        restore_delivered_result(event)
 
     @filter.after_message_sent(desc="发送后补发未混入同一消息链的本地表情图片，并清理临时文件。")
     async def meme_manager_after_message_sent(self, event: AstrMessageEvent):

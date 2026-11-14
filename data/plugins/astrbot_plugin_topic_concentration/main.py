@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from asyncio import CancelledError
 from sys import maxsize
+from weakref import WeakValueDictionary
 
 from astrbot.api import logger
 from astrbot.api.event import filter
@@ -99,19 +100,28 @@ ACTION_DEACTIVATE = "deactivate"
 ACTION_ACTIVATE_POKE = "activate_poke"
 POKE_CALL_TEXT = "用户拍了拍你"
 EMPTY_MENTION_CALL_TEXT = "用户只@了你，没有附带其他内容"
+REPLY_STARTED_AT_EXTRA = "qqbot_reply_started_at"
+REPLY_SUPERSEDED_EXTRA = "qqbot_reply_superseded"
+PUBLIC_REPLY_INSTRUCTION = (
+    "[公开答复]复杂任务已经得到可靠、有帮助的部分结论时，可以先用公开正文发出，再继续调用工具研究，"
+    "有新增证据后补充。普通闲聊不必拆段，不重复已发内容；待核实的事实不能提前写成结论。"
+    "公开正文必须符合完整人设、身份和证据，可以独立阅读，不是内部分析、草稿或空泛的等待通知。"
+    "发送部分结论不等于结束任务，必要的查询、研究与核验继续完成。[/公开答复]"
+)
 
 
 @register(
     "astrbot_plugin_topic_concentration",
     "MengLei",
     "棉花糖群聊激活状态、显式呼叫与单账号普通 LLM 路由。",
-    "0.6.0",
+    "0.6.1",
 )
 class TopicConcentrationPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
         clear_group_activations()
         clear_poke_interaction_state()
+        self._reply_events = WeakValueDictionary()
         logger.info(
             "[TopicConcentration] loaded Yunqi group activation gate: activation_seconds=%.0f markers=%s,%s",
             ACTIVATION_WINDOW_SECONDS,
@@ -135,6 +145,8 @@ class TopicConcentrationPlugin(Star):
 
     @filter.event_message_type(EventMessageType.ALL, priority=1000, desc="群聊激活状态与云栖普通 LLM 路由；固定命令不参与。")
     async def route_llm_event(self, event):
+        if event.get_extra(REPLY_STARTED_AT_EXTRA) is None:
+            event.set_extra(REPLY_STARTED_AT_EXTRA, time.monotonic())
         poke_target_id = _current_poke_target_id(event)
         if not _is_candidate_event(event, poke_target_id=poke_target_id):
             return
@@ -267,6 +279,8 @@ class TopicConcentrationPlugin(Star):
             ACTIVATION_GENERATION_EXTRA,
             activation_state.generation if activation_state is not None else 0,
         )
+        if not self._track_reply_request(event, low_priority=bool(poke_target_id) or route == ROUTE_CANDIDATE):
+            return
         logger.info(
             "[TopicConcentration] allow LLM: self=%s route=%s trigger=%s renewals=%s group=%s",
             self_id,
@@ -275,6 +289,33 @@ class TopicConcentrationPlugin(Star):
             activation_state.ordinary_reply_renewals if activation_state is not None else 0,
             event.get_group_id(),
         )
+
+    def _track_reply_request(self, event, *, low_priority: bool) -> bool:
+        """Let a direct call stop older optional work through the public event API."""
+        session = event.unified_msg_origin
+        active = [old for old in list(self._reply_events.values())
+                  if old is not event and old.unified_msg_origin == session and not old.is_stopped()]
+        if low_priority and any(not old.get_extra("qqbot_reply_low_priority", False) for old in active):
+            event.stop_event()
+            if event.get_extra(POKE_AI_RESERVED_EXTRA, ""):
+                release_poke_ai(event.get_group_id(), event.get_self_id())
+                event.set_extra(POKE_AI_RESERVED_EXTRA, "")
+            return False
+        if not low_priority:
+            for old in active:
+                if not old.get_extra("qqbot_reply_low_priority", False):
+                    continue
+                old.set_extra(REPLY_SUPERSEDED_EXTRA, True)
+                old.set_extra(PENDING_STATE_ACTION_EXTRA, "")
+                old.stop_event()
+                if old.get_extra(POKE_AI_RESERVED_EXTRA, ""):
+                    release_poke_ai(old.get_group_id(), old.get_self_id())
+                    old.set_extra(POKE_AI_RESERVED_EXTRA, "")
+                self._reply_events.pop(id(old), None)
+                logger.info("[TopicConcentration] stopped optional request for a direct call")
+        event.set_extra("qqbot_reply_low_priority", low_priority)
+        self._reply_events[id(event)] = event
+        return True
 
     @filter.on_waiting_llm_request(priority=1001, desc="在原生 LLM 请求构造前恢复多个账号的完整 @ 文本。")
     async def preserve_multi_mention_text(self, event):
@@ -325,7 +366,12 @@ class TopicConcentrationPlugin(Star):
             event.should_call_llm(True)
             event.stop_event()
             return
+        if event.get_extra(REPLY_SUPERSEDED_EXTRA, False):
+            event.stop_event()
+            return
         route = str(event.get_extra(LLM_ROUTE_EXTRA, "") or "")
+        if route == ROUTE_PRIVATE or (route == ROUTE_EXPLICIT and not event.get_extra(POKE_INTERACTION_EXTRA, "")):
+            req.extra_user_content_parts.append(TextPart(text=PUBLIC_REPLY_INSTRUCTION).mark_as_temp())
         if route == ROUTE_CANDIDATE:
             req.image_urls.clear()
             req.extra_user_content_parts[:] = [
@@ -460,6 +506,9 @@ class TopicConcentrationPlugin(Star):
         if event.get_extra(POKE_AI_RESERVED_EXTRA, ""):
             release_poke_ai(event.get_group_id(), event.get_self_id())
             event.set_extra(POKE_AI_RESERVED_EXTRA, "")
+        if event.get_extra(REPLY_SUPERSEDED_EXTRA, False):
+            _apply_reply_control(response, "", suppress=True)
+            return
         candidate_current = route != ROUTE_CANDIDATE or _candidate_request_is_current(event)
         poke_current = not is_poke or _poke_request_is_current(event)
         if route == ROUTE_CANDIDATE:
@@ -498,7 +547,8 @@ class TopicConcentrationPlugin(Star):
             )
             raw_text = visible_text
         control = parse_reply_control(raw_text) if route in {ROUTE_EXPLICIT, ROUTE_CANDIDATE} else None
-        if route == ROUTE_EXPLICIT and not is_poke and control is not None and not control.cleaned_text:
+        if (route == ROUTE_EXPLICIT and not is_poke and control is not None and not control.cleaned_text
+            and not getattr(response, "tools_call_name", None)):
             retry_response = await retry_explicit_visible_reply(
                 context=self.context,
                 event=event,
@@ -591,6 +641,7 @@ class TopicConcentrationPlugin(Star):
 
     @filter.on_agent_done(desc="从即将持久化的 assistant 历史中移除内部控制标记和提示词回显。")
     async def strip_internal_text_from_history(self, event, run_context, response):
+        self._reply_events.pop(id(event), None)
         if str(event.get_extra(LLM_ROUTE_EXTRA, "") or "") not in {
             ROUTE_PRIVATE,
             ROUTE_EXPLICIT,
