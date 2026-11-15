@@ -108,7 +108,7 @@ from .runtime_temp import TempDuplicateCleaner
 from .runtime_temp import load_temp_dedupe_config
 from .runtime_temp import resolve_astrbot_temp_root
 from .runtime_temp import resolve_plugin_temp_dir
-from .reply_style_guard_logic import CHAT_BUBBLE_REPLY_INSTRUCTION
+
 from .reply_style_guard_logic import STYLE_IMMUTABILITY_INSTRUCTION
 from .reply_style_guard_logic import normalize_long_input_tldr_threshold
 from .reply_style_guard_logic import is_dangerous_local_tool_name
@@ -118,7 +118,7 @@ from .reply_style_guard_logic import sanitize_assistant_context_prompt_echoes
 from .reply_style_guard_logic import sanitize_reply_plain_text
 from .reply_style_guard_logic import should_disable_model_regex_segmenting
 from .reply_style_guard_logic import should_reply_too_long_to_read
-from .reply_style_guard_logic import split_chat_bubble_lines
+
 from .reply_style_guard_logic import strip_internal_prompt_echo
 from .reply_style_guard_runtime import build_folded_reply_chain
 from .reply_style_guard_runtime import extract_onebot_source_tree
@@ -211,7 +211,7 @@ FIXED_COMMAND_PATTERNS = tuple(
 FEATURE_MODE_FULL = "full"
 OWNER_QQ = "605738729"
 DEFAULT_LONG_REPLY_FOLD_THRESHOLD_CHARS = 300
-DEFAULT_LONG_INPUT_TLDR_THRESHOLD_CHARS = 300
+DEFAULT_LONG_INPUT_TLDR_THRESHOLD_CHARS = 0
 DEFAULT_LONG_INPUT_TLDR_TEXT = "太长不看喵"
 LLM_STARTED_AT_EXTRA = "_qqbot_reply_style_guard_llm_started_at"
 FORWARD_SOURCE_TREE_EXTRA = "qqbot_features_forward_source_tree"
@@ -222,15 +222,7 @@ GROUP_NICKNAME_CACHED_EXTRA = "_qqbot_group_nickname_cached"
 INTERNAL_ERROR_PREFIXES = (
     "Error occurred while processing agent request:",
 )
-PLAIN_TEXT_REPLY_INSTRUCTION = (
-    "本轮回复必须使用 QQ 纯文本聊天格式，不要使用 Markdown。"
-    "以下文字格式要求只在决定发送文字时适用；拍一拍选择无视或反拍时，不要求补一条文字回复。"
-    "禁止使用 # 标题、Markdown 列表符号、粗体、反引号代码块、引用块、Markdown 链接和表格。"
-    "普通聊天优先短句自然表达，不要主动列项目符号；需要给 API、JSON、配置示例时允许保留换行和缩进，但不要包代码围栏。"
-    "不要用“如果你愿意”“要的话”“你把具体内容发我”“我可以再帮你”等追问式收尾。"
-    + STYLE_IMMUTABILITY_INSTRUCTION
-    + CHAT_BUBBLE_REPLY_INSTRUCTION
-)
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,7 +456,7 @@ class QQBotFeaturesPlugin(Star):
         self._reply_disable_astrbot_segmented_reply = read_bool_config(
             reply_style_guard_config,
             "disable_astrbot_segmented_reply",
-            default=True,
+            default=False,
         )
         self._reply_long_input_tldr_threshold_chars = normalize_long_input_tldr_threshold(
             get_config_value(
@@ -644,7 +636,7 @@ class QQBotFeaturesPlugin(Star):
                 getattr(event, "unified_msg_origin", ""),
                 ",".join(removed_tools),
             )
-        req.extra_user_content_parts.append(TextPart(text=PLAIN_TEXT_REPLY_INSTRUCTION).mark_as_temp())
+        req.extra_user_content_parts.append(TextPart(text=STYLE_IMMUTABILITY_INSTRUCTION).mark_as_temp())
         recent_replies = recent_assistant_reply_texts(req.contexts)
         if recent_replies:
             recent_reply_lines = "\n".join(
@@ -742,9 +734,9 @@ class QQBotFeaturesPlugin(Star):
         )
         await self._meme_runtime.resp(event, response)
 
-    @filter.on_decorating_result(desc="发送前拦截群聊 LLM 内部错误，并清理普通回复风格。")
+    @filter.on_decorating_result(desc="发送前拦截内部错误、控制标记与权限泄漏。")
     async def strip_reply_style_tail(self, event: AstrMessageEvent):
-        """Suppress group LLM failures before applying ordinary reply decorations."""
+        """Suppress internal data while preserving the model's ordinary reply content."""
         result = event.get_result()
         if result is None or not result.chain:
             return
@@ -768,10 +760,7 @@ class QQBotFeaturesPlugin(Star):
             if not isinstance(comp, CorePlain):
                 cleaned_chain.append(comp)
                 continue
-            cleaned = sanitize_reply_plain_text(
-                comp.text,
-                strip_question_tail=not bool(event.get_extra(EMPTY_MENTION_CALL_EXTRA, "")),
-            )
+            cleaned = sanitize_reply_plain_text(comp.text)
             if cleaned != comp.text:
                 comp.text = cleaned
                 changed = True
@@ -783,20 +772,14 @@ class QQBotFeaturesPlugin(Star):
                 "[QQBotFeatures] sanitized reply style: session=%s",
                 getattr(event, "unified_msg_origin", ""),
             )
-        bubbled = self._split_short_chat_bubble_result(event, result)
-        if bubbled:
-            logger.info(
-                "[QQBotFeatures] split model-declared chat bubble lines: session=%s lines=%s",
-                getattr(event, "unified_msg_origin", ""),
-                bubbled,
-            )
+
         folded = self._fold_long_reply_result(event, result)
         if folded:
             logger.info(
                 "[QQBotFeatures] folded long reply into AstrBot Nodes chain: session=%s",
                 getattr(event, "unified_msg_origin", ""),
             )
-        if not bubbled and _should_disable_segmented_reply_for_result(
+        if _should_disable_segmented_reply_for_result(
             self.context,
             result,
             override_enabled=self._reply_disable_astrbot_segmented_reply,
@@ -992,21 +975,7 @@ class QQBotFeaturesPlugin(Star):
         )
         return True
 
-    def _split_short_chat_bubble_result(self, event: AstrMessageEvent, result) -> int:
-        if result is None or not result.is_model_result():
-            return 0
-        if event.is_private_chat():
-            return 0
-        if len(result.chain) != 1:
-            return 0
-        comp = result.chain[0]
-        if not isinstance(comp, CorePlain):
-            return 0
-        lines = split_chat_bubble_lines(comp.text)
-        if len(lines) <= 1:
-            return 0
-        result.chain = [CorePlain(line) for line in lines]
-        return len(lines)
+
 
     @filter.regex(MENU_PATTERN, desc="发送总览图片菜单，展示当前 AstrBot 已接管的群务、互动、生图、游戏和工具分类。")
     async def menu(self, event: AstrMessageEvent):

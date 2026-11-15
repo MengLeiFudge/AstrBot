@@ -7,12 +7,13 @@ from weakref import WeakValueDictionary
 
 from astrbot.api import logger
 from astrbot.api.event import filter
-from astrbot.api.message_components import At, Image, Plain, Poke, Reply
+from astrbot.api.message_components import At, Plain, Poke, Reply
 from astrbot.api.star import Context, Star, register
 from astrbot.core.agent.message import TextPart
 from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
+from .message_context import ReadChatHistoryTool
 from .logic import ACTIVATION_WINDOW_SECONDS
 from .logic import CANDIDATE_MAX_WAIT_SECONDS
 from .logic import DEACTIVATE_MARKER
@@ -114,7 +115,7 @@ PUBLIC_REPLY_INSTRUCTION = (
     "astrbot_plugin_topic_concentration",
     "MengLei",
     "棉花糖群聊激活状态、显式呼叫与单账号普通 LLM 路由。",
-    "0.6.1",
+    "0.6.2",
 )
 class TopicConcentrationPlugin(Star):
     def __init__(self, context: Context, config=None):
@@ -239,17 +240,6 @@ class TopicConcentrationPlugin(Star):
                 return
 
         if route == ROUTE_CANDIDATE:
-            if not _plain_text(event).strip() and any(
-                isinstance(comp, Image)
-                or (
-                    isinstance(comp, Reply)
-                    and any(isinstance(part, Image) for part in (comp.chain or []))
-                )
-                for comp in event.get_messages()
-            ):
-                event.should_call_llm(False)
-                event.stop_event()
-                return
             event.set_extra(CANDIDATE_RESERVED_EXTRA, "1")
             event.set_extra(CANDIDATE_QUEUED_AT_EXTRA, time.monotonic())
 
@@ -372,15 +362,14 @@ class TopicConcentrationPlugin(Star):
         route = str(event.get_extra(LLM_ROUTE_EXTRA, "") or "")
         if route == ROUTE_PRIVATE or (route == ROUTE_EXPLICIT and not event.get_extra(POKE_INTERACTION_EXTRA, "")):
             req.extra_user_content_parts.append(TextPart(text=PUBLIC_REPLY_INSTRUCTION).mark_as_temp())
-        if route == ROUTE_CANDIDATE:
-            req.image_urls.clear()
-            req.extra_user_content_parts[:] = [
-                part for part in req.extra_user_content_parts
-                if not (isinstance(part, TextPart) and part.text.startswith("[Image Attachment"))
-            ]
         if route == ROUTE_CANDIDATE and not _candidate_request_is_current(event):
             _stop_stale_candidate(event, stage="provider")
             return
+        if event.get_platform_name() == "aiocqhttp" and not event.get_extra(POKE_INTERACTION_EXTRA, ""):
+            # Older originals are read only when the agent needs them.
+            if req.func_tool is None:
+                req.func_tool = ToolSet()
+            req.func_tool.add_tool(ReadChatHistoryTool())
         # Clean persisted assistant markers before the model can imitate them.
         # Preserve user messages, non-text parts and tool-call/result pairing.
         for index in range(len(req.contexts) - 1, -1, -1):

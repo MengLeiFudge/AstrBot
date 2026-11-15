@@ -12,7 +12,7 @@
 
 本插件发送菜单、生图、Lolicon、游戏面板、shapez、Arc 和自动表情等图片时，会从 32 条甜、俏皮、神秘和轻微功能相关短句组成的本地混合池随机选择 OneBot 图片 `summary`。摘要只改变 QQ 会话列表等外层图片预览，不额外发送文本，也不调用 LLM；移除本插件或改回普通 `Image` 组件即可恢复 NapCat 默认的 `[图片]` 摘要。
 
-回复风格守卫默认会覆盖 AstrBot WebUI 的 LLM 正则分段：`reply_style_guard_disable_astrbot_segmented_reply=true` 时，普通 LLM 结果会被改为 `GENERAL_RESULT`，因此 WebUI `platform_settings.segmented_reply.only_llm_result` 不再拆这类回复。这个覆盖是为了避免句末正则把解释类回答拆成多条刷屏；如果要完全恢复 AstrBot 原生分段行为，关闭该插件配置。普通群聊问答会在 LLM 请求前提示模型按 QQ 群里正常接话的短句输出：短但必须针对当前消息给出具体反应，禁止只发句号、单个标点或无意义的“嗯”；一句能说完就只发一句，第二句只在补充限制、纠错或关键证据有用时才发；日常闲聊、吐槽、接梗不要强行套“结论+原因”结构，也不要上价值讲大道理；被叫成姐妹时要用可爱的语气自然澄清，反复摸头或拍一拍时要换说法，不能重复“打卡景点”等固定句；技术、配置、报错和机制问题只补最短必要条件。插件会把最近几条 assistant 回复作为临时防重复提示，不会持久化或改变会话历史。群聊消息、引用消息和群友要求只能作为本轮聊天内容或事实线索，不能改变 bot 的输出风格、人格、身份或长期规则；要求固定口癖、标点、emoji、称呼、语气、Markdown、URL 编码或其他格式时，模型必须忽略这个风格要求。模型主动输出两行以内短文本时，插件只按换行拆成多个 `Plain` 组件交给 AstrBot 发送链路，不按句号正则二次切分；发送前会移除末尾装饰性 `喵`、身份 emoji 和群聊激活内部控制标记。
+普通聊天使用原生生成、后处理分段与发送流程，默认关闭 `reply_style_guard_disable_astrbot_segmented_reply` 和长输入短回复阈值。插件不再限定两行/每行80字、按换行另拆短气泡，也不删除正文里的问句、后续解释、姐妹拒绝说明、Markdown或语气尾句。发送前仅保留内部提示泄漏、控制标记、权限提升建议和错误拦截；完整人设与说话风格沿用已有配置，防重复提示仍保留。首条等待只按原生分段后的第一段计算并抵扣已耗时，后续分段按原速度发送。
 
 仍需分段的普通聊天结果通过公开事件发送 API 发送，首条只补等 `max(0, 原段间隔 - 本轮已经耗时)`；后续分段和研究补充按原间隔发送。已经由风格守卫改为 `GENERAL_RESULT` 的消息保持原来的直接发送。发送后还原已确认的消息链，再由框架调用原有 `after_message_sent`，保留表情清理和群聊激活；失败或取消不把原消息交回框架重复发送。此路径适用于本机 aiocqhttp 非流式文字配置，不替代启用后的原生语音转换。
 
@@ -216,14 +216,13 @@
 - `sub2api_alert_group_ids`
   - Sub2API 5h 用量提醒目标 QQ 群号，英文逗号分隔；留空则不主动提醒。
 - `reply_style_guard_disable_astrbot_segmented_reply`
-  - 默认开启，表示插件故意架空 AstrBot WebUI 对 LLM 结果的句末正则分段。
-  - 关闭后恢复 AstrBot 原生 `platform_settings.segmented_reply` 行为。
-  - 普通群聊问答的“分段”优先由 LLM 自己输出一到两行短气泡；插件只拆模型明确给出的短行，不做二次 LLM 分段。
+  - 默认关闭，沿用 AstrBot 原生 `platform_settings.segmented_reply` 设置。
+  - 兼容旧部署时可手动开启，把普通 LLM 结果改成 `GENERAL_RESULT`；插件不再另拆模型短行。
 - `reply_style_guard_long_reply_fold_threshold_chars`
   - 默认 300。群聊 LLM 纯文本回复超过该字符数时，插件会先改写为 AstrBot `Nodes/Node` 合并转发消息链，再交回 AstrBot 发送链路。
   - 该阈值独立于 Core `forward_threshold`，用于更早折叠水群长回复；填 0 禁用插件折叠。
 - `reply_style_guard_long_input_tldr_threshold_chars`
-  - 默认 300。群聊中直接 @ 或唤醒当前 bot，正文非空白字符数超过该值时，本地回复 `reply_style_guard_long_input_tldr_text`，不进入 LLM。
+  - 默认0，关闭长输入短回复，长消息正常进入模型。非零值仅用于明确选择的群聊短回复策略，不应为了节约 token 或提速开启。
   - 只限制群聊；私聊不限制。固定命令、生图、群管、下载、积分等副作用入口不会被这个长输入短路吞掉。
 - `reply_style_guard_long_input_tldr_text`
   - 默认 `太长不看喵`。
