@@ -34,8 +34,11 @@ class CPASessionProvider(ProviderOpenAIResponses):
         payload, context = await super()._prepare_chat_payload(*args, **kwargs)
         # Platform instance names may contain Chinese; HTTP headers require ASCII.
         payload["extra_headers"] = {
-            **payload.get("extra_headers", {}),
-            "X-Client-Request-Id": quote(str(session_id), safe=":"),
+            **{
+                key: value for key, value in payload.get("extra_headers", {}).items()
+                if key.lower() not in {"x-client-request-id", "x-opencode-session", "user-agent"}
+            },
+            "x-opencode-session": quote(str(session_id), safe=":"),
             "User-Agent": "QQBot/AstrBot-cpa-session/0.1.0",
         }
         return payload, context
