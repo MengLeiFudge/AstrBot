@@ -11,7 +11,44 @@ $DataRoot = Join-Path $ProjectRoot "data"
 $LogRoot = Join-Path $DataRoot "logs"
 $StdoutLog = Join-Path $LogRoot "astrbot.stdout.log"
 $StderrLog = Join-Path $LogRoot "astrbot.stderr.log"
-$RequiredPorts = @(6185, 6200, 8080, 8081)
+function Get-DeclaredPorts {
+    # Ports are read from the running configs; account and plugin port constants stay single-sourced.
+    $ports = New-Object 'System.Collections.Generic.List[int]'
+    $cmdConfigPath = Join-Path $DataRoot "cmd_config.json"
+    if (Test-Path -LiteralPath $cmdConfigPath) {
+        $cmdConfig = Get-Content -LiteralPath $cmdConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([int]$cmdConfig.dashboard.port -gt 0) {
+            $ports.Add([int]$cmdConfig.dashboard.port)
+        }
+        foreach ($platform in @($cmdConfig.platform)) {
+            if ([int]$platform.ws_reverse_port -gt 0) {
+                $ports.Add([int]$platform.ws_reverse_port)
+            }
+        }
+    }
+    $dspConfigPath = Join-Path $DataRoot "config\astrbot_plugin_dsp_knowledge_config.json"
+    if (Test-Path -LiteralPath $dspConfigPath) {
+        $dspConfig = Get-Content -LiteralPath $dspConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($key in @('api_port', 'port', 'http_port')) {
+            if ($dspConfig.PSObject.Properties.Name -contains $key -and [int]$dspConfig.$key -gt 0) {
+                $ports.Add([int]$dspConfig.$key)
+            }
+        }
+    }
+    $artifactSource = Join-Path $DataRoot "plugins\astrbot_plugin_local_artifact_api\main.py"
+    if (Test-Path -LiteralPath $artifactSource) {
+        $match = [regex]::Match((Get-Content -LiteralPath $artifactSource -Raw), '(?m)^PORT\s*=\s*(\d+)')
+        if ($match.Success) {
+            $ports.Add([int]$match.Groups[1].Value)
+        }
+    }
+    return @($ports | Sort-Object -Unique)
+}
+
+$RequiredPorts = @(Get-DeclaredPorts)
+if ($RequiredPorts.Count -eq 0) {
+    throw "AstrBot declared ports are missing from its configs; readiness cannot be verified."
+}
 $ProjectPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $ExtraRequirements = Join-Path $ProjectRoot "deployment\extra-requirements.txt"
 
@@ -96,7 +133,7 @@ function Wait-AstrBotReady {
         }
         $missing = @(Get-MissingPorts)
         if ($missing.Count -eq 0) {
-            Write-Host "AstrBot is ready on ports 6185, 6200, 8080, and 8081."
+            Write-Host ("AstrBot is ready on ports {0}." -f ($RequiredPorts -join ', '))
             return
         }
         Start-Sleep -Milliseconds 250
