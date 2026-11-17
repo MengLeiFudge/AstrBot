@@ -28,6 +28,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .bot_identity import KNOWN_SISTER_BOT_QQ_IDS
 from .bot_identity import YUNQI_IDENTITY_FACT
+from .bot_identity import YUNQI_ROLE_AND_RELATIONSHIPS
 from .bot_identity import is_known_bot_sender_id
 from .codexradar_efficiency import fetch_codexradar_efficiency
 from .codexradar_efficiency import render_codexradar_efficiency_image
@@ -515,6 +516,16 @@ class QQBotFeaturesPlugin(Star):
         )
 
     async def initialize(self) -> None:
+        persona = await self.context.persona_manager.get_persona("云栖")
+        if any(legacy in persona.system_prompt for legacy in ("星遥", "月澄", "3109326090")):
+            tail = persona.system_prompt.partition("# Style & Tone")[2]
+            prompt = YUNQI_ROLE_AND_RELATIONSHIPS
+            if tail:
+                prompt += "# Style & Tone" + tail
+            await self.context.persona_manager.update_persona(
+                "云栖", system_prompt=prompt, begin_dialogs=persona.begin_dialogs,
+            )
+            logger.info("[QQBotFeatures] migrated Yunqi role and relationships through PersonaManager")
         if self._sub2api_config.base_url and self._sub2api_config.admin_api_key:
             self._sub2api_refresh_task = asyncio.create_task(self._sub2api_usage_refresh_loop())
             self._codexradar_efficiency_task = asyncio.create_task(
