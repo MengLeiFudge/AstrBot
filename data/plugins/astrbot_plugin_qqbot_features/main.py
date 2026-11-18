@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from dataclasses import replace
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from sys import maxsize
@@ -64,6 +65,7 @@ from .rightcodes_draw_logic import RightCodesDrawRequest
 from .rightcodes_draw_logic import RightCodesDrawResult
 from .rightcodes_draw_logic import extract_rightcodes_draw_model_switch
 from .rightcodes_draw_logic import extract_removed_rightcodes_draw_temporary_model
+from .rightcodes_draw_logic import fetch_rightcodes_draw_models
 from .rightcodes_draw_logic import format_draw_quota_exceeded_message
 from .rightcodes_draw_logic import format_draw_start_message
 from .rightcodes_draw_logic import format_rightcodes_draw_failure
@@ -1741,16 +1743,23 @@ class QQBotFeaturesPlugin(Star):
             return
         if looks_like_rightcodes_draw_help_command(text):
             balance = await asyncio.to_thread(store.get_balance, user_id)
+            available_models = await self._rightcodes_draw_models(balance.model)
             yield event.plain_result(
-                format_rightcodes_draw_model_help(balance.model, multiplier=balance.multiplier)
+                format_rightcodes_draw_model_help(
+                    balance.model, multiplier=balance.multiplier, available_models=available_models,
+                )
             )
             event.stop_event()
             return
         if looks_like_rightcodes_draw_model_switch(text):
+            balance = await asyncio.to_thread(store.get_balance, user_id)
+            candidate = extract_rightcodes_draw_model_switch(text) or ""
             model = parse_rightcodes_draw_model_switch(text)
-            if model is None:
-                candidate = extract_rightcodes_draw_model_switch(text) or ""
-                yield event.plain_result(format_rightcodes_draw_model_switch_invalid(candidate))
+            available_models = await self._rightcodes_draw_models(model or balance.model)
+            if model is None or (available_models and model not in available_models):
+                yield event.plain_result(
+                    format_rightcodes_draw_model_switch_invalid(candidate, available_models=available_models)
+                )
             else:
                 balance = await asyncio.to_thread(store.set_model, user_id, model)
                 yield event.plain_result(format_rightcodes_draw_model_switch_success(balance))
@@ -1817,6 +1826,11 @@ class QQBotFeaturesPlugin(Star):
             yield event.plain_result(f"{detail}。本次没有扣积分。")
             event.stop_event()
             return
+        draw_model = await self._resolve_rightcodes_draw_model(balance.model)
+        if draw_model != balance.model:
+            balance = await asyncio.to_thread(store.set_model, user_id, draw_model)
+            draw_request = replace(draw_request, model=draw_model)
+            draw_requests = tuple(replace(item, model=draw_model) for item in draw_requests)
         quota = await asyncio.to_thread(store.reserve, user_id, model=draw_request.model)
         if not quota.allowed:
             yield event.plain_result(format_draw_quota_exceeded_message(quota))
@@ -1903,6 +1917,24 @@ class QQBotFeaturesPlugin(Star):
             await self._deliver_draw_result(event, results, draw_request.model, refund_once, expected_count=len(draw_requests))
         finally:
             event.stop_event()
+
+    async def _rightcodes_draw_models(self, preferred: str) -> tuple[str, ...]:
+        """List CPA image models, keeping the preferred one first when it is registered."""
+        config = self._rightcodes_config
+        if not config.api_key:
+            return ()
+        try:
+            return await fetch_rightcodes_draw_models(
+                api_key=config.api_key, base_url=config.base_url, preferred=preferred,
+            )
+        except Exception as exc:
+            logger.warning("[QQBotFeatures] draw model discovery failed: error_type=%s", type(exc).__name__)
+            return ()
+
+    async def _resolve_rightcodes_draw_model(self, stored_model: str) -> str:
+        """Switch to a model CPA still registers when the saved one is gone."""
+        models = await self._rightcodes_draw_models(stored_model)
+        return models[0] if models else stored_model
 
     async def _deliver_draw_result(
         self,

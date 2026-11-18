@@ -26,16 +26,35 @@ from .runtime_storage import read_json_file
 
 RIGHTCODES_DRAW_BASE_URL = "http://127.0.0.1:8317/v1"
 RIGHTCODES_DRAW_USER_AGENT = "QQBot-CPA-Draw/1.0"
-RIGHTCODES_DRAW_DEFAULT_MODEL = "gpt-image-2.5"
+RIGHTCODES_DRAW_DEFAULT_MODEL = "gpt-image-2.6"
 RIGHTCODES_DRAW_POINT_PRICE_MULTIPLIER = 1000
-RIGHTCODES_DRAW_MODEL_ORDER = (RIGHTCODES_DRAW_DEFAULT_MODEL,)
-RIGHTCODES_DRAW_MODELS = set(RIGHTCODES_DRAW_MODEL_ORDER)
-RIGHTCODES_DRAW_MODEL_PRICES = {
-    RIGHTCODES_DRAW_DEFAULT_MODEL: Decimal("0.04"),
-}
-RIGHTCODES_DRAW_MODEL_DESCRIPTIONS = {
-    RIGHTCODES_DRAW_DEFAULT_MODEL: "支持文字生图和参考图生图",
-}
+RIGHTCODES_DRAW_FALLBACK_PRICE = Decimal("0.04")
+RIGHTCODES_DRAW_MODEL_PRICES: dict[str, Decimal] = {}
+RIGHTCODES_DRAW_FALLBACK_DESCRIPTION = "支持文字生图和参考图生图"
+RIGHTCODES_DRAW_MODEL_DESCRIPTIONS: dict[str, str] = {}
+RIGHTCODES_DRAW_MODEL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
+RIGHTCODES_DRAW_IMAGE_MODEL_HINTS = (
+    "image",
+    "imagen",
+    "dall-e",
+    "dalle",
+    "flux",
+    "banana",
+    "seedream",
+)
+RIGHTCODES_DRAW_MODEL_UNAVAILABLE_HINTS = (
+    "is not supported on /v1/images/",
+    "model_not_found",
+    "model not found",
+    "model does not exist",
+    "unsupported model",
+    "no available channel",
+)
+RIGHTCODES_DRAW_MODEL_CACHE_TTL_SECONDS = 600.0
+RIGHTCODES_DRAW_MODEL_ATTEMPT_LIMIT = 4
+_DRAW_MODEL_VERSION_RE = re.compile(r"(\d+(?:\.\d+)*)")
+_DRAW_MODEL_CACHE: dict[tuple[str, str], tuple[float, tuple[str, ...]]] = {}
+_DRAW_MODEL_CACHE_LOCK = asyncio.Lock()
 FEATURE_MODE_FULL = "full"
 _DRAW_POINTS_LOCK = threading.Lock()
 _DRAW_POINTS_QUERY_RE = re.compile(
@@ -102,6 +121,14 @@ class RightCodesDrawTimeoutError(TimeoutError):
         super().__init__(f"生图超过 {timeout_seconds:.0f} 秒未返回")
 
 
+class RightCodesDrawModelUnavailableError(RuntimeError):
+    """Raised when CPA does not register the requested model for the Images API."""
+
+    def __init__(self, model: str) -> None:
+        self.model = model
+        super().__init__(f"CPA 尚未将 {model} 注册为图片模型")
+
+
 class RightCodesDrawClient:
     """Send image requests through CPA, which owns upstream selection and retries."""
 
@@ -150,23 +177,62 @@ class RightCodesDrawClient:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def draw(self, request: RightCodesDrawRequest) -> RightCodesDrawResult:
+        """Generate one image, falling back to other registered image models."""
+
+        if not self.api_key:
+            raise ValueError("缺少 CPA 生图 API Key")
+        preferred = str(request.model or "").strip().lower()
+        if not RIGHTCODES_DRAW_MODEL_NAME_RE.fullmatch(preferred):
+            raise ValueError(f"不支持的生图模型: {request.model}")
+        candidates = await self._model_candidates(preferred)
+        attempted: list[str] = []
+        refreshed = False
+        index = 0
+        while index < len(candidates) and len(attempted) < RIGHTCODES_DRAW_MODEL_ATTEMPT_LIMIT:
+            model = candidates[index]
+            index += 1
+            if model in attempted:
+                continue
+            attempted.append(model)
+            try:
+                return await self._draw_with_model(request, model)
+            except RightCodesDrawModelUnavailableError:
+                if refreshed:
+                    continue
+                refreshed = True
+                invalidate_rightcodes_draw_models(api_key=self.api_key, base_url=self.base_url)
+                for extra in await self._model_candidates(preferred, refresh=True):
+                    if extra not in candidates:
+                        candidates.append(extra)
+        tried = "、".join(attempted) or preferred
+        raise RuntimeError(f"CPA 没有可用的生图模型（已尝试 {tried}），请检查渠道模型的 image 配置")
+
+    async def _model_candidates(self, preferred: str, *, refresh: bool = False) -> list[str]:
+        """Return the preferred model first, then other image models registered in CPA."""
+
+        try:
+            models = await fetch_rightcodes_draw_models(
+                api_key=self.api_key, base_url=self.base_url, preferred=preferred, refresh=refresh,
+            )
+        except (httpx.HTTPError, ValueError):
+            return [preferred]
+        return list(models) or [preferred]
+
+    async def _draw_with_model(self, request: RightCodesDrawRequest, model: str) -> RightCodesDrawResult:
         """Generate one image, uploading references through the Images edits API.
 
         Args:
-            request: Prompt, selected model, and optional reference image sources.
+            request: Prompt and optional reference image sources.
+            model: Image model that CPA registered for the Images API.
 
         Returns:
             The original source, validated PNG bytes, and total elapsed seconds.
 
         Raises:
-            ValueError: If the credential, model, or reference image is invalid.
+            RightCodesDrawModelUnavailableError: If CPA does not register the model.
             RightCodesDrawTimeoutError: If the total deadline expires.
             RuntimeError: If CPA returns an error or no image.
         """
-        if not self.api_key:
-            raise ValueError("缺少 CPA 生图 API Key")
-        if request.model not in RIGHTCODES_DRAW_MODELS:
-            raise ValueError(f"不支持的生图模型: {request.model}")
         started = time.perf_counter()
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -174,7 +240,7 @@ class RightCodesDrawClient:
             "User-Agent": RIGHTCODES_DRAW_USER_AGENT,
         }
         payload = {
-            "model": request.model,
+            "model": model,
             "prompt": request.prompt,
             "n": 1,
             "size": "1024x1024",
@@ -218,8 +284,8 @@ class RightCodesDrawClient:
                 detail = ""
             detail = re.sub(r"\s+", " ", detail).replace(self.api_key, "[redacted]")
             detail = re.sub(r"\b(?:sk-|Bearer\s+)[A-Za-z0-9._-]+", "[redacted]", detail, flags=re.IGNORECASE)[:300]
-            if "is not supported on /v1/images/" in detail:
-                detail = f"CPA 尚未将 {request.model} 注册为图片模型，请检查渠道模型的 image 配置"
+            if is_rightcodes_draw_model_unavailable(exc.response.status_code, detail):
+                raise RightCodesDrawModelUnavailableError(model) from exc
             message = f"生图服务返回 HTTP {exc.response.status_code}"
             if detail:
                 message += f"：{detail}"
@@ -286,6 +352,114 @@ async def load_draw_reference_image(source: str, client: httpx.AsyncClient) -> t
     return image, mime
 
 
+def is_rightcodes_draw_model_unavailable(status_code: int, detail: str) -> bool:
+    """Tell whether a CPA failure means the model is not usable for images."""
+
+    if status_code == 404:
+        return True
+    lowered = detail.lower()
+    return any(hint in lowered for hint in RIGHTCODES_DRAW_MODEL_UNAVAILABLE_HINTS)
+
+
+def rank_rightcodes_draw_models(models: tuple[str, ...] | list[str], *, preferred: str = "") -> tuple[str, ...]:
+    """Rank registered image models with the preferred one first.
+
+    Args:
+        models: Model identifiers reported by CPA.
+        preferred: Model to put first when it is still registered.
+
+    Returns:
+        Deduplicated image model names; newer base names precede their variants.
+    """
+    candidates = [
+        name
+        for name in (str(raw or "").strip().lower() for raw in models)
+        if RIGHTCODES_DRAW_MODEL_NAME_RE.fullmatch(name)
+        and any(hint in name for hint in RIGHTCODES_DRAW_IMAGE_MODEL_HINTS)
+    ]
+    ordered = sorted(dict.fromkeys(candidates), key=_rightcodes_draw_model_sort_key)
+    preferred_key = str(preferred or "").strip().lower()
+    if preferred_key in ordered:
+        ordered.remove(preferred_key)
+        ordered.insert(0, preferred_key)
+    return tuple(ordered)
+
+
+def _rightcodes_draw_model_sort_key(model: str) -> tuple[tuple[int, ...], int, str]:
+    """Sort newer versions first and keep a base name ahead of its variants."""
+    match = _DRAW_MODEL_VERSION_RE.search(model)
+    version = tuple(-int(part) for part in match.group(1).split(".")) if match else (1,)
+    return (version, model.count("-"), model)
+
+
+def _rightcodes_draw_model_cache_key(api_key: str, base_url: str) -> tuple[str, str]:
+    return (base_url.rstrip("/"), api_key)
+
+
+def invalidate_rightcodes_draw_models(*, api_key: str, base_url: str) -> None:
+    """Drop the cached model list so the next call rediscovers CPA registrations."""
+    _DRAW_MODEL_CACHE.pop(_rightcodes_draw_model_cache_key(api_key, base_url), None)
+
+
+async def fetch_rightcodes_draw_models(
+    *,
+    api_key: str,
+    base_url: str,
+    preferred: str = "",
+    refresh: bool = False,
+) -> tuple[str, ...]:
+    """Read the image models CPA currently registers, cached for a short while.
+
+    Args:
+        api_key: CPA client credential.
+        base_url: OpenAI-compatible API root including /v1.
+        preferred: Model to put first when it is still registered.
+        refresh: Ignore the cached model list.
+
+    Returns:
+        Ranked image model names; empty when CPA registers none.
+
+    Raises:
+        httpx.HTTPError: If the model list request fails.
+        ValueError: If the response is not JSON.
+    """
+    cache_key = _rightcodes_draw_model_cache_key(api_key, base_url)
+    if not refresh:
+        cached = _DRAW_MODEL_CACHE.get(cache_key)
+        if cached is not None and time.monotonic() - cached[0] < RIGHTCODES_DRAW_MODEL_CACHE_TTL_SECONDS:
+            return rank_rightcodes_draw_models(cached[1], preferred=preferred)
+    async with _DRAW_MODEL_CACHE_LOCK:
+        cached = None if refresh else _DRAW_MODEL_CACHE.get(cache_key)
+        if cached is not None and time.monotonic() - cached[0] < RIGHTCODES_DRAW_MODEL_CACHE_TTL_SECONDS:
+            return rank_rightcodes_draw_models(cached[1], preferred=preferred)
+        models = await request_rightcodes_draw_models(api_key=api_key, base_url=base_url)
+        _DRAW_MODEL_CACHE[cache_key] = (time.monotonic(), models)
+    return rank_rightcodes_draw_models(models, preferred=preferred)
+
+
+async def request_rightcodes_draw_models(*, api_key: str, base_url: str) -> tuple[str, ...]:
+    """List every model identifier CPA reports through the OpenAI models endpoint."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "User-Agent": RIGHTCODES_DRAW_USER_AGENT,
+    }
+    async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+        response = await client.get(f"{base_url.rstrip('/')}/models", headers=headers)
+        response.raise_for_status()
+        data = response.json()
+    entries = data.get("data") if isinstance(data, dict) else data
+    if not isinstance(entries, list):
+        return ()
+    names = []
+    for entry in entries:
+        value = entry.get("id") if isinstance(entry, dict) else entry
+        name = str(value or "").strip().lower()
+        if name:
+            names.append(name)
+    return tuple(dict.fromkeys(names))
+
+
 class RightCodesDrawQuotaStore:
     def __init__(
         self,
@@ -333,7 +507,7 @@ class RightCodesDrawQuotaStore:
         model_key = str(model or "").strip().lower()
         if not user_key:
             raise ValueError("缺少 QQ 用户 ID")
-        if model_key not in RIGHTCODES_DRAW_MODELS:
+        if not RIGHTCODES_DRAW_MODEL_NAME_RE.fullmatch(model_key):
             raise ValueError(f"不支持的生图模型: {model}")
         with _DRAW_POINTS_LOCK:
             payload = self._read()
@@ -545,7 +719,7 @@ def format_rightcodes_draw_missing_prompt_message() -> str:
 def format_rightcodes_draw_temporary_model_removed(model: str) -> str:
     return (
         f"生图命令不再支持临时指定模型 {model}，本次没有扣积分。"
-        f"当前仅支持 {RIGHTCODES_DRAW_DEFAULT_MODEL}，请直接发送“文生图 提示词”。"
+        "生图模型由 CPA 当前注册的图片模型自动选择，请直接发送“文生图 提示词”。"
     )
 
 
@@ -608,25 +782,29 @@ def parse_rightcodes_draw_model_switch(text: str) -> str | None:
     candidate = extract_rightcodes_draw_model_switch(text)
     if candidate is None:
         return None
-    model = candidate.lower()
-    return model if model in RIGHTCODES_DRAW_MODELS else None
+    model = candidate.strip().lower()
+    return model if RIGHTCODES_DRAW_MODEL_NAME_RE.fullmatch(model) else None
 
 
 def format_rightcodes_draw_model_help(
     current_model: str = RIGHTCODES_DRAW_DEFAULT_MODEL,
     *,
     multiplier: int = RIGHTCODES_DRAW_POINT_PRICE_MULTIPLIER,
+    available_models: tuple[str, ...] = (),
 ) -> str:
     current_model = normalize_rightcodes_draw_model(current_model)
+    models = tuple(dict.fromkeys(available_models)) or (current_model,)
     lines = [f"当前生图模型：{current_model}", "可用模型："]
-    for model in RIGHTCODES_DRAW_MODEL_ORDER:
-        description = RIGHTCODES_DRAW_MODEL_DESCRIPTIONS[model]
+    for model in models:
+        description = get_rightcodes_draw_model_description(model)
         price = format_rightcodes_draw_model_price(model)
         current_mark = "（当前）" if model == current_model else ""
         lines.append(
             f"· {model}{current_mark}：{price} 元/次，"
             f"{calculate_rightcodes_draw_model_points(model, multiplier=multiplier)} 积分。{description}"
         )
+    if current_model not in models:
+        lines.append(f"当前保存的 {current_model} 已不可用，下次生图会自动改用上面的可用模型。")
     lines.extend(
         [
             "",
@@ -666,7 +844,7 @@ def format_rightcodes_draw_points_ranking(
 
 def format_rightcodes_draw_model_switch_success(balance: RightCodesDrawPointBalance) -> str:
     cost_points = calculate_rightcodes_draw_model_points(balance.model, multiplier=balance.multiplier)
-    description = RIGHTCODES_DRAW_MODEL_DESCRIPTIONS[balance.model]
+    description = get_rightcodes_draw_model_description(balance.model)
     return "\n".join(
         [
             f"已切换生图模型：{balance.model}",
@@ -677,13 +855,21 @@ def format_rightcodes_draw_model_switch_success(balance: RightCodesDrawPointBala
     )
 
 
-def format_rightcodes_draw_model_switch_invalid(candidate: str) -> str:
+def format_rightcodes_draw_model_switch_invalid(
+    candidate: str,
+    *,
+    available_models: tuple[str, ...] = (),
+) -> str:
     candidate = str(candidate or "").strip()
-    first_line = f"不支持这个生图模型：{candidate}" if candidate else "当前只有一个生图模型，无需切换。"
+    first_line = f"不支持这个生图模型：{candidate}" if candidate else "请填写要切换的生图模型。"
+    available_line = (
+        f"当前可用：{'、'.join(available_models)}" if available_models
+        else "暂时查不到 CPA 当前可用的生图模型。"
+    )
     return "\n".join(
         [
             first_line,
-            f"唯一可用模型：{RIGHTCODES_DRAW_DEFAULT_MODEL}",
+            available_line,
             "生图用法：文生图 提示词；图生图 提示词（附图或引用）",
         ]
     )
@@ -760,7 +946,15 @@ def calculate_rightcodes_draw_model_points(
 
 
 def get_rightcodes_draw_model_price(model: str) -> Decimal:
-    return RIGHTCODES_DRAW_MODEL_PRICES[normalize_rightcodes_draw_model(model)]
+    return RIGHTCODES_DRAW_MODEL_PRICES.get(
+        normalize_rightcodes_draw_model(model), RIGHTCODES_DRAW_FALLBACK_PRICE,
+    )
+
+
+def get_rightcodes_draw_model_description(model: str) -> str:
+    return RIGHTCODES_DRAW_MODEL_DESCRIPTIONS.get(
+        normalize_rightcodes_draw_model(model), RIGHTCODES_DRAW_FALLBACK_DESCRIPTION,
+    )
 
 
 def format_rightcodes_draw_model_price(model: str) -> str:
@@ -919,7 +1113,7 @@ def safe_int(value: object, default: int) -> int:
 
 def normalize_rightcodes_draw_model(model: object) -> str:
     candidate = str(model or "").strip().lower()
-    return candidate if candidate in RIGHTCODES_DRAW_MODELS else RIGHTCODES_DRAW_DEFAULT_MODEL
+    return candidate if RIGHTCODES_DRAW_MODEL_NAME_RE.fullmatch(candidate) else RIGHTCODES_DRAW_DEFAULT_MODEL
 
 
 def mask_qq_user_id(user_id: object) -> str:
