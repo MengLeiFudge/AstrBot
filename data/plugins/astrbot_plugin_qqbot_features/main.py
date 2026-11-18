@@ -312,8 +312,8 @@ FEATURES: tuple[FeatureSpec, ...] = (
         name="RightCodes生图",
         aliases=("生图", "画图", "RightCodes"),
         lines=(
-            "文生图 提示词 / 图生图 提示词（附图或引用）：60～150 积分/次（按模型）",
-            "头像生图 [@某人] 提示词：默认用自己的头像，指定目标须紧跟命令",
+            "文生图 / 图生图 / 头像生图 [@某人] 提示词：60～150 积分/次（按模型）",
+            "动图：文生动图 / 图生动图 / 头像生动图；上游回退静态图时会在成品消息注明",
             "生图模型 / 生图价格：查看当前模型、可用模型与价格",
             "查看积分 / balance / points：查询积分、当前模型和消耗；积分排行：查看全群前 10",
         ),
@@ -1914,7 +1914,10 @@ class QQBotFeaturesPlugin(Star):
             raise
 
         try:
-            await self._deliver_draw_result(event, results, draw_request.model, refund_once, expected_count=len(draw_requests))
+            await self._deliver_draw_result(
+                event, results, draw_request.model, refund_once,
+                expected_count=len(draw_requests), gif=draw_request.gif,
+            )
         finally:
             event.stop_event()
 
@@ -1944,8 +1947,9 @@ class QQBotFeaturesPlugin(Star):
         refund: Callable[[], Awaitable[None]],
         *,
         expected_count: int,
+        gif: bool = False,
     ) -> None:
-        """Save every successful PNG and send all images in one awaited message.
+        """Save every successful image and send all of them in one awaited message.
 
         Args:
             event: Command event with its original reply destination.
@@ -1953,13 +1957,17 @@ class QQBotFeaturesPlugin(Star):
             model: Selected model for the completion message.
             refund: Request-scoped, at-most-once point refund operation.
             expected_count: Requested image count, including any failed calls.
+            gif: Whether the request asked CPA for an animated GIF.
         """
         saved_paths = []
         images = []
         for result in results:
             saved = None
             try:
-                saved = await asyncio.to_thread(save_generated_image, result.image_bytes, self._rightcodes_config.data_root)
+                saved = await asyncio.to_thread(
+                    save_generated_image, result.image_bytes, self._rightcodes_config.data_root,
+                    image_format=result.image_format,
+                )
             except Exception as exc:
                 logger.error("[QQBotFeatures] draw persistence failed: error_type=%s", type(exc).__name__)
             if saved is not None:
@@ -1974,6 +1982,8 @@ class QQBotFeaturesPlugin(Star):
         )
         if len(results) < expected_count:
             message += f"\n本次{expected_count}张中有{expected_count - len(results)}张生成失败，以下为全部成功结果，未重复生成。"
+        if gif and all(result.image_format == "png" for result in results):
+            message += "\n本次请求的是动图，但上游返回了静态图片。"
         if len(saved_paths) < len(results):
             message += "\n部分图片未保存到本地，已尝试直接交付，请及时保存。"
         try:

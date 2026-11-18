@@ -11,11 +11,10 @@ import re
 
 import httpx
 
-from .rightcodes_draw_logic import RightCodesDrawRequest, load_draw_reference_image
+from .rightcodes_draw_logic import RIGHTCODES_DRAW_DOUDOUYAN_COMMAND, RightCodesDrawRequest, load_draw_reference_image
 
 
-STANDARD_DRAW_PREFIX = re.compile(r"^\s*(文生图|图生图|头像生图)")
-DOUDOUYAN_AVATAR_COMMAND = "生成豆豆眼头像"
+STANDARD_DRAW_PREFIX = re.compile(r"^\s*(文生动图|图生动图|头像生动图|文生图|图生图|头像生图)")
 OWN_AVATAR = re.compile(r"(?:我(?:的)?|本人(?:的)?|自己(?:的)?)\s*头像")
 REFERENCE_DEADLINE = 30.0
 OneBotCall = Callable[..., Awaitable[object]]
@@ -50,13 +49,13 @@ async def doudouyan_command_parts(segments: Sequence[Mapping], *, call_action: O
         An explicit single-image command, or None for an ordinary drawing request.
     """
     text = explicit_command_text(segments).strip()
-    if text == DOUDOUYAN_AVATAR_COMMAND:
+    if text == RIGHTCODES_DRAW_DOUDOUYAN_COMMAND:
         return [{"type": "text", "data": {"text": "头像生图 豆豆眼"}}]
     if "豆豆眼" not in text:
         return None
     match = STANDARD_DRAW_PREFIX.match(text)
     if match:
-        return None if match.group(1) == "文生图" else list(segments)
+        return None if match.group(1).startswith("文生") else list(segments)
     if OWN_AVATAR.search(text):
         return [{"type": "text", "data": {"text": "头像生图 豆豆眼"}}]
     images = [part for part in segments if part.get("type") == "image"]
@@ -114,6 +113,8 @@ async def prepare_explicit_draw_request(
     if match is None:
         raise ValueError("没有找到文生图或图生图指令")
     mode = match.group(1)
+    animated = mode.endswith("动图")
+    base_mode = f"{mode[:-2]}图" if animated else mode
     prompt = text[match.end():].strip()
     mentions = []
     offset = 0
@@ -127,15 +128,17 @@ async def prepare_explicit_draw_request(
             mentions.append((offset, qq))
     target = sender_id
     if mentions:
-        if mode != "头像生图":
+        if base_mode != "头像生图":
             raise ValueError("提示词中请用文字描述对象；指定头像请使用“头像生图 @某人 提示词”")
         if len(mentions) != 1 or text[match.end():mentions[0][0]].strip():
             raise ValueError("头像目标不唯一或位置不明确，请将唯一的 @ 紧跟在“头像生图”后")
         target = mentions[0][1]
     if not prompt:
         raise ValueError("请在生图指令后填写提示词")
-    if mode == "文生图":
-        return RightCodesDrawRequest(prompt=prompt, model=model)
+    if base_mode == "文生图":
+        return RightCodesDrawRequest(prompt=prompt, model=model, gif=animated)
+    if "豆豆眼" in prompt and animated:
+        raise ValueError("豆豆眼预设是静态四张，不支持动图；请用“图生图 豆豆眼”或“文生动图 提示词”")
 
     if "豆豆眼" in prompt:
         try:
@@ -147,7 +150,7 @@ async def prepare_explicit_draw_request(
             raise ValueError("豆豆眼固定提示词读取失败，请联系管理员") from exc
 
     async with asyncio.timeout(REFERENCE_DEADLINE):
-        if mode == "头像生图":
+        if base_mode == "头像生图":
             if not re.fullmatch(r"[1-9][0-9]{4,11}", target):
                 raise ValueError("无法取得有效的头像目标QQ号，请使用真实的单人艾特")
             source = f"https://q1.qlogo.cn/g?b=qq&nk={target}&s=640"
@@ -193,7 +196,9 @@ async def prepare_explicit_draw_request(
                 source = str(detail.get("url") or detail.get("file") or detail.get("path") or "")
                 if not re.match(r"^(?:https?://|file://|/|[A-Za-z]:[\\/])", source):
                     raise ValueError("图片地址已失效，请重新发送")
-        return await preload_draw_references(RightCodesDrawRequest(prompt=prompt, model=model, image_urls=(source,)))
+        return await preload_draw_references(
+            RightCodesDrawRequest(prompt=prompt, model=model, image_urls=(source,), gif=animated)
+        )
 
 
 def prepare_doudouyan_requests(request: RightCodesDrawRequest) -> tuple[RightCodesDrawRequest, ...]:

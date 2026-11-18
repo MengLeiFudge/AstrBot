@@ -71,6 +71,8 @@ _DRAW_POINTS_MUTATION_RE = re.compile(
 )
 _DRAW_MODEL_SWITCH_PRIMARY_RE = re.compile(r"^切换\s*生图\s*模型\s*(.*)$", re.IGNORECASE)
 _DRAW_MODEL_SWITCH_ALIAS_RE = re.compile(r"^生图\s*模型\s*(.+)$", re.IGNORECASE)
+RIGHTCODES_DRAW_COMMAND_RE = re.compile(r"^(文生动图|图生动图|头像生动图|文生图|图生图|头像生图)([\s\S]*)$")
+RIGHTCODES_DRAW_DOUDOUYAN_COMMAND = "生成豆豆眼头像"
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,15 +80,17 @@ class RightCodesDrawRequest:
     prompt: str
     model: str = RIGHTCODES_DRAW_DEFAULT_MODEL
     image_urls: tuple[str, ...] = ()
+    gif: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class RightCodesDrawResult:
-    """Validated PNG bytes for persistence/delivery, with the original CPA source."""
+    """Validated image bytes for persistence/delivery, with the original CPA source."""
 
     image_url: str
     total_seconds: float
     image_bytes: bytes = b""
+    image_format: str = "png"
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,7 +253,7 @@ class RightCodesDrawClient:
             "n": 1,
             "size": "1024x1024",
             "response_format": "b64_json",
-            "output_format": "png",
+            "output_format": "gif" if request.gif else "png",
         }
         try:
             async with asyncio.timeout(self.timeout_seconds):
@@ -278,7 +282,7 @@ class RightCodesDrawClient:
                     image_url = extract_image_url_from_object(data)
                     if not image_url:
                         raise RuntimeError(extract_rightcodes_task_error(data) or "生图服务没有返回图片")
-                    image_bytes = await load_generated_image(image_url, client)
+                    image_bytes, image_format = await load_generated_image(image_url, client)
         except (TimeoutError, httpx.TimeoutException) as exc:
             raise RightCodesDrawTimeoutError(self.timeout_seconds) from exc
         except httpx.HTTPStatusError as exc:
@@ -295,7 +299,8 @@ class RightCodesDrawClient:
                 message += f"：{detail}"
             raise RuntimeError(message) from exc
         return RightCodesDrawResult(
-            image_url=image_url, image_bytes=image_bytes, total_seconds=time.perf_counter() - started,
+            image_url=image_url, image_bytes=image_bytes, image_format=image_format,
+            total_seconds=time.perf_counter() - started,
         )
 
 
@@ -656,16 +661,18 @@ def should_record_passive_group_points(
 
 def parse_rightcodes_draw_command(text: str) -> RightCodesDrawRequest | None:
     normalized = text.strip()
-    rest = extract_rightcodes_draw_prompt(normalized)
-    if rest is None or not rest:
+    if normalized == RIGHTCODES_DRAW_DOUDOUYAN_COMMAND:
+        return RightCodesDrawRequest(prompt="豆豆眼头像")
+    command = split_rightcodes_draw_command(normalized)
+    if command is None or not command[1]:
         return None
     if extract_removed_rightcodes_draw_temporary_model(normalized) is not None:
         return None
-    return RightCodesDrawRequest(prompt=rest)
+    return RightCodesDrawRequest(prompt=command[1], gif=command[2])
 
 
 def looks_like_rightcodes_draw_invocation(text: str) -> bool:
-    return extract_rightcodes_draw_prompt(text.strip()) is not None
+    return split_rightcodes_draw_command(text.strip()) is not None or text.strip() == RIGHTCODES_DRAW_DOUDOUYAN_COMMAND
 
 
 def looks_like_rightcodes_draw_feature_request(text: str) -> bool:
@@ -682,6 +689,25 @@ def looks_like_rightcodes_draw_feature_request(text: str) -> bool:
     )
 
 
+def split_rightcodes_draw_command(text: str) -> tuple[str, str, bool] | None:
+    """Split a draw command into its base form, prompt, and animation flag.
+
+    Args:
+        text: Message text without surrounding whitespace or mention components.
+
+    Returns:
+        Base command, remaining prompt, and whether the command asked for a GIF;
+        None when the text does not start with a draw command.
+    """
+    command_match = RIGHTCODES_DRAW_COMMAND_RE.match(text)
+    if command_match is None:
+        return None
+    command = command_match.group(1)
+    animated = command.endswith("动图")
+    base = f"{command[:-2]}图" if animated else command
+    return base, command_match.group(2).strip(), animated
+
+
 def extract_rightcodes_draw_prompt(text: str) -> str | None:
     """Extract text after a draw prefix without requiring or stripping an image suffix.
 
@@ -691,10 +717,8 @@ def extract_rightcodes_draw_prompt(text: str) -> str | None:
     Returns:
         The complete prompt, an empty string for a bare prefix, or None for other messages.
     """
-    command_match = re.match(r"^(?:文生图|图生图|头像生图|(?:棉花糖|棉花)\s*生图|生成)([\s\S]*)$", text)
-    if command_match is not None:
-        return command_match.group(1).strip()
-    return None
+    command = split_rightcodes_draw_command(text)
+    return None if command is None else command[1]
 
 
 def extract_removed_rightcodes_draw_temporary_model(text: str) -> str | None:
@@ -717,7 +741,10 @@ def looks_like_rightcodes_draw_command(text: str) -> bool:
 
 
 def format_rightcodes_draw_missing_prompt_message() -> str:
-    return "请填写提示词。用法：文生图 提示词；图生图 提示词（附图或引用图）；头像生图 [@某人] 提示词。"
+    return (
+        "请填写提示词。用法：文生图 提示词；图生图 提示词（附图或引用图）；头像生图 [@某人] 提示词；"
+        "把“生图”换成“生动图”即可生成动图（文生动图 / 图生动图 / 头像生动图）。"
+    )
 
 
 def format_rightcodes_draw_temporary_model_removed(model: str) -> str:
@@ -813,6 +840,8 @@ def format_rightcodes_draw_model_help(
         [
             "",
             "生图指令：文生图 提示词；图生图 提示词（附图或引用）；头像生图 [@某人] 提示词",
+            "动图指令：把上面的“生图”换成“生动图”，即 文生动图 / 图生动图 / 头像生动图",
+            "私聊或 @机器人 时也可以直接说“画只猫”“生成一只白猫”，由 AI 判断后调用同一个生图功能",
         ]
     )
     return "\n".join(lines)
@@ -874,7 +903,7 @@ def format_rightcodes_draw_model_switch_invalid(
         [
             first_line,
             available_line,
-            "生图用法：文生图 提示词；图生图 提示词（附图或引用）",
+            "生图用法：文生图 提示词；图生图 提示词（附图或引用）；动图用 文生动图 / 图生动图",
         ]
     )
 
@@ -906,10 +935,11 @@ def format_rightcodes_draw_success(
     model: str,
     image_count: int = 1,
 ) -> str:
+    unit = "张动图" if result.image_format == "gif" else "张"
     return (
         "✨ 生成成功！\n"
         f"📊 耗时: {result.total_seconds:.2f}s\n"
-        f"🖼️ 数量: {image_count}张\n"
+        f"🖼️ 数量: {image_count}{unit}\n"
         f"🤖 模型: {model}"
     )
 
@@ -1004,7 +1034,10 @@ def extract_image_url_from_object(data: object) -> str:
     if isinstance(data, dict):
         value = data.get("b64_json")
         if isinstance(value, str) and value.strip():
-            return f"data:image/png;base64,{value.strip()}"
+            mime = str(data.get("mime_type") or "").strip().lower()
+            if not re.fullmatch(r"image/[a-z0-9.+-]+", mime):
+                mime = "image/png"
+            return f"data:{mime};base64,{value.strip()}"
         value = data.get("url")
         if isinstance(value, str):
             extracted = extract_image_url(value)
