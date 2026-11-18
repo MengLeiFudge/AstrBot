@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$ForceRestart,
     [switch]$SkipInstall,
     [int]$ReadyTimeoutSeconds = 120
@@ -193,6 +193,8 @@ if ($occupied.Count -gt 0) {
 $env:VIRTUAL_ENV = Join-Path $ProjectRoot ".venv"
 $env:Path = (Split-Path -Parent $ProjectPython) + ";" + $env:Path
 $env:PYTHONUNBUFFERED = "1"
+# Plugin .py edits reload in-process; a framework restart never touches NapCat.
+$env:ASTRBOT_RELOAD = "1"
 New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
 $mainPath = Join-Path $ProjectRoot "main.py"
 # WMI owns the detached process; cmd writes logs without inheriting the launcher's streams.
