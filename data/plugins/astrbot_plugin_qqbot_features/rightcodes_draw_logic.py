@@ -28,8 +28,12 @@ RIGHTCODES_DRAW_BASE_URL = "http://127.0.0.1:8317/v1"
 RIGHTCODES_DRAW_USER_AGENT = "QQBot-CPA-Draw/1.0"
 RIGHTCODES_DRAW_DEFAULT_MODEL = "gpt-image-2.6"
 RIGHTCODES_DRAW_POINT_PRICE_MULTIPLIER = 1000
-RIGHTCODES_DRAW_FALLBACK_PRICE = Decimal("0.04")
-RIGHTCODES_DRAW_MODEL_PRICES: dict[str, Decimal] = {}
+RIGHTCODES_DRAW_FALLBACK_PRICE = Decimal("0.06")
+RIGHTCODES_DRAW_MODEL_PRICES: dict[str, Decimal] = {
+    "gpt-image-2.6": Decimal("0.06"),
+    "gpt-image-2.6-flare": Decimal("0.15"),
+    "gpt-image-2.6-sunburst": Decimal("0.15"),
+}
 RIGHTCODES_DRAW_FALLBACK_DESCRIPTION = "支持文字生图和参考图生图"
 RIGHTCODES_DRAW_MODEL_DESCRIPTIONS: dict[str, str] = {}
 RIGHTCODES_DRAW_MODEL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
