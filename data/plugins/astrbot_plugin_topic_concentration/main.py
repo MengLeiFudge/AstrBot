@@ -115,7 +115,7 @@ PUBLIC_REPLY_INSTRUCTION = (
     "astrbot_plugin_topic_concentration",
     "MengLei",
     "棉花糖群聊激活状态、显式呼叫与单账号普通 LLM 路由。",
-    "0.6.2",
+    "0.6.3",
 )
 class TopicConcentrationPlugin(Star):
     def __init__(self, context: Context, config=None):

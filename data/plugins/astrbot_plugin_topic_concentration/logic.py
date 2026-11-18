@@ -16,7 +16,7 @@ except ModuleNotFoundError:  # AstrBot runtime imports plugins as data.plugins.<
     )
 
 
-ACTIVATION_WINDOW_SECONDS = 180.0
+ACTIVATION_WINDOW_SECONDS = 600.0
 CANDIDATE_MAX_WAIT_SECONDS = 30.0
 SKIP_REPLY_MARKER = "[[QQBOT_SKIP_REPLY]]"
 DEACTIVATE_MARKER = "[[QQBOT_DEACTIVATE]]"
@@ -751,7 +751,7 @@ def build_group_activation_instruction(
         "当前消息没有直接叫你，只因为你在这个群的激活窗口内而成为候选消息。",
         "先判断你现在插话是否自然、有新增价值、没有抢别人话和重复群友已经说清的内容。",
         f"不值得回复时必须只返回 {SKIP_REPLY_MARKER}，不要附带解释、表情或其他文字。",
-        "如果决定可见回复，回复会把激活窗口重新续到 3 分钟。",
+        "如果决定可见回复，回复会把激活窗口重新续到 10 分钟。",
         f"当前已经因普通候选回复连续续期 {renewals} 次。",
         f"话题已经自然收尾、继续说只会刷屏或你已经参与够多时，可以只返回 {DEACTIVATE_MARKER}，"
         f"也可以先给一句必要的简短收尾，再在末尾附加 {DEACTIVATE_MARKER}。",
