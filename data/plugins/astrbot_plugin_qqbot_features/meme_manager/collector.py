@@ -26,7 +26,12 @@ from .curator import MemeCurator
 from .library_plan import (
     MIN_ENTRY_TOTAL,
     PHASH_MAX_DISTANCE,
+    PRIVATE_CATEGORY,
+    PRIVATE_RULES,
     SCORE_VERSION,
+    TIE_MARGIN,
+    archive_image,
+    ensure_private_category,
     TIE_MARGIN,
     archive_image,
     find_similar_caption,
@@ -59,7 +64,12 @@ COLLECT_SYSTEM_PROMPT = (
     "quality（0-20）、usable（0-15）、category（现有分类原名）和 caption（不超过 40 字的中文描述）。"
     "能认得出图里的角色时，在 caption 开头写上角色名（用通用中文译名），认不出或不确定就不要写，不要猜。"
     "四项分是后续排名的依据，要按实际看图结果给，不要一律给高分。"
-    "不收藏时输出 {\"collect\":false}，不要输出解释或 Markdown。"
+    "不收藏时要给出 rule，值只能是以下之一：sexual_explicit（露点或裸露）、"
+    "sexual_suggestive（性行为或强性暗示）、undress_meme（脱衣内衣或暴露梗）、gore（恐怖血腥）、"
+    "real_person（真人照片）、screenshot（聊天或工作界面截图）、personal_info（个人资料或证件）、"
+    "ad（广告引流）、watermark（水印盖住主体）、unrecognizable（看不出情绪）、low_quality（画质低）、"
+    "wrong_category（分类不合适或不像表情包）；同时尽量给出 caption 描述画面。"
+    "不要输出解释或 Markdown。"
 )
 
 
@@ -200,6 +210,13 @@ class MemeAutoCollector:
         if not isinstance(decision, dict) or not isinstance(decision.get("collect"), bool):
             raise ValueError("Invalid meme collection decision")
         if not decision["collect"]:
+            rule = str(decision.get("rule") or "").strip()
+            if rule in PRIVATE_RULES:
+                # 暧昧或色情图不进公开图库，但存进云栖不发的私密分类
+                caption = decision.get("caption")
+                caption = caption.strip()[:300] if isinstance(caption, str) else ""
+                self._store_private(content, extension, caption or rule, rule, image_phash(content))
+                logger.info("[MemeCollector] stored private meme: rule=%s", rule)
             self._seen[key] = None
             return
 
@@ -214,7 +231,12 @@ class MemeAutoCollector:
             "usable": _score_part(decision.get("usable"), 15),
         }
         if scores["usable"] == 0:
-            logger.info("[MemeCollector] skipped unusable meme: category=%s", category)
+            rule = str(decision.get("rule") or "").strip()
+            if rule in PRIVATE_RULES:
+                self._store_private(content, extension, caption.strip(), rule, image_phash(content))
+                logger.info("[MemeCollector] stored private meme: rule=%s", rule)
+            else:
+                logger.info("[MemeCollector] skipped unusable meme: category=%s rule=%s", category, rule)
             self._seen[key] = None
             return
         total = sum(scores.values())
@@ -299,6 +321,24 @@ class MemeAutoCollector:
             phash=phash,
         )
         logger.info("[MemeCollector] collected local meme: category=%s", category)
+        return str(saved["filename"])
+
+    def _store_private(self, content: bytes, extension: str, caption: str, rule: str, phash: str) -> str | None:
+        """Store one suggestive image into the private category that is never auto-sent."""
+        try:
+            with io.BytesIO(content) as stream:
+                upload = FileStorage(stream=stream, filename=f"{hashlib.sha256(content).hexdigest()}{extension}")
+                saved = add_emoji_to_category(PRIVATE_CATEGORY, upload)
+        except DuplicateEmojiError:
+            return None
+        upsert_image_metadata(PRIVATE_CATEGORY, saved["filename"], {
+            "title": caption.strip()[:80],
+            "content_caption": caption.strip()[:300],
+            "emotion_tags": [PRIVATE_CATEGORY],
+            "auto_send_enabled": False,
+        })
+        ensure_private_category()
+        logger.info("[MemeCollector] collected private meme: rule=%s", rule)
         return str(saved["filename"])
 
     def _looks_identical(self, phash: str, images: list) -> bool:

@@ -18,11 +18,13 @@ from astrbot.api.star import Context
 from .backend.models import move_emoji_to_category
 from .config import MEMES_DIR
 from .library_plan import (
+    ARCHIVE_RULES,
+    PRIVATE_RULES,
     SCORE_VERSION,
     archive_image,
     image_phash,
+    move_to_private_category,
     rank_of,
-    trim_category,
 )
 from .local_index import (
     find_image_entry,
@@ -51,7 +53,12 @@ SCORING_SYSTEM_PROMPT = (
     "输出 JSON 对象：cute、expressive、quality、usable 为整数；category 为给定分类原名；"
     "caption 为不超过 40 字的中文描述。能认得出图里的角色时，在描述开头写上角色名（用通用中文译名，"
     "如初音未来、蕾姆、芙宁娜），再写动作和情绪；认不出或不确定就不要写名字，不要猜。"
-    "不要输出解释或 Markdown。"
+    "usable 为 0 时必须额外给出 rule，值只能是以下之一："
+    "sexual_explicit（露点或裸露）、sexual_suggestive（性行为或强性暗示）、undress_meme（脱衣内衣或暴露梗）、"
+    "gore（恐怖血腥）、real_person（真人照片）、screenshot（聊天或工作界面截图）、"
+    "personal_info（个人资料或证件）、ad（广告引流）、watermark（水印盖住主体）、"
+    "unrecognizable（看不出情绪或糊到认不出）、low_quality（画质低）、wrong_category（分类不合适或不像表情包）。"
+    "usable 大于 0 时 rule 留空字符串。不要输出解释或 Markdown。"
 )
 
 SEND_SYSTEM_PROMPT = (
@@ -260,8 +267,13 @@ class MemeCurator:
         expressive = _score_part(decision.get("expressive"), 25)
         quality = _score_part(decision.get("quality"), 20)
         usable = _score_part(decision.get("usable"), 15)
+        rule = _archive_rule(decision.get("rule"))
         if usable == 0:
-            archive_image(category, filename, reason="unfit")
+            if rule in PRIVATE_RULES:
+                # 色情或暧昧图不删，迁入云栖不自动发送的私密分类
+                if move_to_private_category(category, filename, rule=rule):
+                    return "archived", category
+            archive_image(category, filename, reason="unfit", rule=rule)
             return "archived", category
 
         caption = decision.get("caption")
@@ -489,6 +501,12 @@ def _score_part(value: object, maximum: int) -> int:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ValueError("Meme score is missing")
     return max(0, min(maximum, int(value)))
+
+
+def _archive_rule(value: object) -> str:
+    """Return a known archive rule id, or an empty string when the model gave none."""
+    rule = str(value or "").strip()
+    return rule if rule in ARCHIVE_RULES else ""
 
 
 def _backfill_phashes(limit: int) -> int:

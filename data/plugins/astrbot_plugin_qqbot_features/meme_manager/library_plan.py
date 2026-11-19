@@ -25,6 +25,25 @@ TIE_MARGIN = 5.0
 MIN_ENTRY_TOTAL = 55
 CAPTION_SIMILARITY = 0.7
 PHASH_MAX_DISTANCE = 6
+PRIVATE_CATEGORY = "private_suggestive"
+
+# 归档/归零分的具体原因，模型必须给出一条，人工审核页面按此分类
+ARCHIVE_RULES: dict[str, str] = {
+    "sexual_explicit": "露点或裸露",
+    "sexual_suggestive": "性行为或强性暗示",
+    "undress_meme": "脱衣、内衣或暴露梗",
+    "gore": "恐怖血腥",
+    "real_person": "真人照片",
+    "screenshot": "聊天、评论或工作界面截图",
+    "personal_info": "个人资料、证件或二维码",
+    "ad": "广告或引流",
+    "watermark": "水印盖住主体",
+    "unrecognizable": "看不出情绪或糊到认不出",
+    "low_quality": "画质低或压缩糊",
+    "wrong_category": "分类不合适或不像表情包",
+    "duplicate": "与库里已有图重复",
+}
+PRIVATE_RULES = ("sexual_explicit", "sexual_suggestive", "undress_meme")
 
 CATEGORY_QUOTAS: dict[str, int] = {
     # 主力情绪
@@ -57,6 +76,8 @@ CATEGORY_QUOTAS: dict[str, int] = {
     "polite_awkward_smile": 6,
     "no_need": 6,
     "game_invite": 6,
+    # 私密分类：云栖不自动发送，留给其他机器人或私聊场景
+    PRIVATE_CATEGORY: 40,
 }
 
 CATEGORY_MERGES: dict[str, str] = {
@@ -187,7 +208,7 @@ def _caption_grams(caption: str) -> set[str]:
     return {text[index:index + 2] for index in range(len(text) - 1)}
 
 
-def archive_image(category: str, filename: str, *, reason: str, note: str = "") -> bool:
+def archive_image(category: str, filename: str, *, reason: str, note: str = "", rule: str = "") -> bool:
     """Move one image out of the library into the per-category archive.
 
     Args:
@@ -195,6 +216,7 @@ def archive_image(category: str, filename: str, *, reason: str, note: str = "") 
         filename: Image file name inside that category.
         reason: Short tag recorded in the archive manifest.
         note: Optional extra explanation.
+        rule: Specific rule id from ``ARCHIVE_RULES``; the reviewer needs it to know why.
 
     Returns:
         True when the file was moved and its index entry removed.
@@ -202,7 +224,7 @@ def archive_image(category: str, filename: str, *, reason: str, note: str = "") 
     name = Path(filename).name
     source = Path(MEMES_DIR) / category / name
     target_dir = ARCHIVE_DIR / category
-    record = _archive_record(category, name, reason, note)
+    record = _archive_record(category, name, reason, note, rule)
     if not source.is_file():
         # 文件已经不在了：只清掉指向它的索引条目，不写归档清单
         logger.warning("[MemeArchive] source missing: category=%s filename=%s", category, name)
@@ -227,6 +249,120 @@ def archive_image(category: str, filename: str, *, reason: str, note: str = "") 
     _append_manifest(target_dir, record)
     logger.info("[MemeArchive] archived: category=%s filename=%s reason=%s", category, name, reason)
     return True
+
+
+def ensure_private_category() -> None:
+    """Make sure the private category exists and never auto-sends from Cloud."""
+    index = load_meme_index()
+    payload = index.setdefault("categories", {}).setdefault(PRIVATE_CATEGORY, {})
+    if not isinstance(payload, dict):
+        payload = {}
+        index["categories"][PRIVATE_CATEGORY] = payload
+    before = dict(payload)
+    payload.update({
+        "label": "私密暧昧",
+        "description": "偏暧昧或色情的图，云栖不自动发送，留给其他机器人或私聊场景。",
+        "use_cases": [],
+        "avoid_when": ["群聊", "云栖自动发送"],
+        "auto_send_enabled": False,
+    })
+    if before != payload:
+        save_meme_index(index)
+
+
+def move_to_private_category(source_category: str, filename: str, *, rule: str = "") -> bool:
+    """Move one image into the private category that is never auto-sent.
+
+    Args:
+        source_category: Category or archive folder the image currently sits in.
+        filename: Image file name.
+        rule: Rule id that triggered the move, kept in the index for review.
+
+    Returns:
+        True when the file was moved and re-indexed as private.
+    """
+    name = Path(filename).name
+    candidates = (
+        Path(MEMES_DIR) / source_category / name,
+        ARCHIVE_DIR / source_category / name,
+    )
+    source = next((path for path in candidates if path.is_file()), None)
+    if source is None:
+        logger.warning("[MemeArchive] private move skipped, file missing: %s/%s", source_category, name)
+        return False
+    target_dir = Path(MEMES_DIR) / PRIVATE_CATEGORY
+    target = target_dir / name
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            target = target_dir / f"{Path(name).stem}-{int(time.time())}{Path(name).suffix}"
+        shutil.move(str(source), str(target))
+    except Exception as exc:
+        logger.warning("[MemeArchive] private move failed: error_type=%s", type(exc).__name__)
+        return False
+
+    index = load_meme_index()
+    images = [entry for entry in index.get("images", []) if isinstance(entry, dict)]
+    dropped = next(
+        (
+            entry
+            for entry in images
+            if entry.get("category") == source_category and entry.get("filename") == name
+        ),
+        None,
+    )
+    if dropped is not None:
+        images.remove(dropped)
+    entry = dict(dropped) if dropped else {}
+    entry.update({
+        "category": PRIVATE_CATEGORY,
+        "filename": target.name,
+        "relative_path": f"memes/{PRIVATE_CATEGORY}/{target.name}",
+        "auto_send_enabled": False,
+    })
+    entry.setdefault("title", Path(name).stem)
+    entry.setdefault("content_caption", "")
+    entry["private_from"] = source_category
+    if rule:
+        entry["private_rule"] = rule
+    images.append(entry)
+    index["images"] = images
+    payload = index.setdefault("categories", {}).setdefault(PRIVATE_CATEGORY, {})
+    payload.update({
+        "label": "私密暧昧",
+        "description": "偏暧昧或色情的图，云栖不自动发送，留给其他机器人或私聊场景。",
+        "use_cases": [],
+        "avoid_when": ["群聊", "云栖自动发送"],
+        "auto_send_enabled": False,
+    })
+    save_meme_index(index)
+    _drop_manifest_entry(source_category, name)
+    logger.info("[MemeArchive] moved to private: from=%s filename=%s rule=%s", source_category, name, rule)
+    return True
+
+
+def _drop_manifest_entry(category: str, filename: str) -> None:
+    """Remove one record from an archive manifest after the file left the archive."""
+    path = ARCHIVE_DIR / category / ARCHIVE_MANIFEST_NAME
+    if not path.is_file():
+        return
+    try:
+        records = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(records, list):
+        return
+    kept = [
+        record
+        for record in records
+        if not (isinstance(record, dict) and record.get("filename") == filename)
+    ]
+    if len(kept) == len(records):
+        return
+    try:
+        path.write_text(json.dumps(kept, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
 
 
 def trim_category(category: str) -> int:
@@ -408,7 +544,7 @@ def _move_to_archive(category: str, filename: str, entry: dict | None, reason: s
     return True
 
 
-def _archive_record(category: str, filename: str, reason: str, note: str) -> dict:
+def _archive_record(category: str, filename: str, reason: str, note: str, rule: str = "") -> dict:
     """Build one archive manifest record."""
     record = {
         "filename": Path(filename).name,
@@ -416,6 +552,8 @@ def _archive_record(category: str, filename: str, reason: str, note: str) -> dic
         "reason": reason,
         "archived_at": int(time.time()),
     }
+    if rule:
+        record["rule"] = rule
     if note:
         record["note"] = note
     return record
