@@ -41,6 +41,7 @@ from .comic_pdf import send_private_pdfs_with_password
 from .draw_input import STANDARD_DRAW_PREFIX, doudouyan_command_parts, prepare_doudouyan_requests, prepare_explicit_draw_request, preload_draw_references
 from .draw_output import save_generated_image
 from .draw_intent import DRAW_INTENT_SYSTEM, DrawIntentRouter, component_text
+from .feature_directory import format_feature_directory_injection
 from .image_summary import prepare_onebot_image_summary_chain
 from .image_summary import choose_image_summary
 from .image_summary import random_summary_image_from_file
@@ -1623,6 +1624,18 @@ class QQBotFeaturesPlugin(Star):
         logger.info(
             "[QQBotFeatures] injected RightCodes draw catalog: session=%s",
             getattr(event, "unified_msg_origin", ""),
+        )
+
+    @filter.on_llm_request(desc="在 LLM 请求前注入功能目录索引，命中功能时补充该功能的确切指令与限制。")
+    async def inject_feature_directory(self, event: AstrMessageEvent, req: ProviderRequest):
+        request_context = build_current_request_context(event, req.prompt or "")
+        query = request_context.combined_query or request_context.current_text
+        injection = format_feature_directory_injection(query)
+        req.extra_user_content_parts.append(TextPart(text=injection).mark_as_temp())
+        logger.info(
+            "[QQBotFeatures] injected feature directory: session=%s chars=%s",
+            getattr(event, "unified_msg_origin", ""),
+            len(injection),
         )
 
     @filter.on_llm_request(desc="在 LLM 请求前把被引用消息作为当前请求原文补入上下文。")
