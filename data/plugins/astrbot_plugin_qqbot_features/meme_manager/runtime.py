@@ -41,6 +41,7 @@ from .collector import MemeAutoCollector
 from .curator import MemeCurator
 from .config import DEFAULT_CATEGORY_DESCRIPTIONS, MEMES_DATA_PATH, MEMES_DIR
 from .init import init_plugin
+from .library_plan import apply_category_plan
 from .local_index import select_meme_for_emotion
 from .meme_markup import clean_meme_markup_text, extract_wrapped_meme_markups
 from .utils import (
@@ -166,11 +167,12 @@ class MemeManagerRuntime:
         self.curator = MemeCurator(
             context,
             enabled=_bool_config(self.config, "curate_enabled", True),
-            interval_seconds=_int_config(self.config, "curate_interval_minutes", 60, minimum=5) * 60,
-            batch_size=_int_config(self.config, "curate_batch_size", 12, minimum=1),
+            interval_seconds=_int_config(self.config, "curate_interval_minutes", 15, minimum=5) * 60,
+            batch_size=_int_config(self.config, "curate_batch_size", 60, minimum=1),
             send_check_enabled=_bool_config(self.config, "send_check_enabled", True),
             review_ttl_seconds=_int_config(self.config, "review_cache_hours", 168, minimum=1) * 3600,
             send_timeout_seconds=_int_config(self.config, "send_check_timeout_seconds", 8, minimum=1),
+            score_valid_seconds=_int_config(self.config, "score_valid_days", 90, minimum=1) * 86400,
         )
         self.auto_collector = MemeAutoCollector(
             context,
@@ -1280,8 +1282,11 @@ class MemeManagerRuntime:
             logger.error(f"[meme_manager] 转换图片为 GIF 失败: {e}")
             return image_path
 
-    def start_background_tasks(self) -> None:
-        """启动图库整理循环，重复调用无副作用。"""
+    async def start_background_tasks(self) -> None:
+        """先按分类计划归位图库，再启动打分循环。"""
+        stats = apply_category_plan()
+        if any(stats.values()):
+            await self.reload_emotions()
         self.curator.start()
 
     async def _select_sendable_meme(

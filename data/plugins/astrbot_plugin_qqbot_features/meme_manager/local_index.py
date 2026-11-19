@@ -322,6 +322,40 @@ def record_image_review(
     return entry
 
 
+def record_image_score(
+    category: str,
+    filename: str,
+    *,
+    cute: int,
+    expressive: int,
+    quality: int,
+    usable: int,
+    version: int,
+    caption: str = "",
+) -> dict[str, Any] | None:
+    """记录模型实际读图得出的分项分数，供配额排序复用。"""
+    index = load_meme_index()
+    entry = _find_entry(index, category, Path(filename).name)
+    if entry is None:
+        return None
+    now = int(time.time())
+    if caption:
+        entry["title"] = caption[:80]
+        entry["content_caption"] = caption[:300]
+    entry.setdefault("added_at", now)
+    entry["score"] = {
+        "total": int(cute) + int(expressive) + int(quality) + int(usable),
+        "cute": int(cute),
+        "expressive": int(expressive),
+        "quality": int(quality),
+        "usable": int(usable),
+        "version": int(version),
+        "at": now,
+    }
+    save_meme_index(index)
+    return entry
+
+
 def move_image_metadata(source_category: str, filename: str, target_category: str, target_filename: str | None = None) -> None:
     index = load_meme_index()
     entry = _find_entry(index, source_category, filename)

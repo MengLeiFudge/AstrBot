@@ -257,13 +257,17 @@
 - `meme_manager_auto_collect_enabled`
   - 默认开启，后台只收藏可爱、萌的动漫表情包到本地图库；擦边、脱衣或暴露梗、恐怖血腥、真人照片、截图、广告和模糊低清的图不收藏。
 - `meme_manager_auto_collect_interval_seconds` / `meme_manager_auto_collect_max_images`
-  - 默认最短分析间隔 60 秒、图库总量上限 1000 张；最短间隔不能低于 5 秒。
+  - 默认最短分析间隔 60 秒；`max_images` 是图库总量硬上限，默认 400 张，只作兵底，日常由分类配额控制。最短间隔不能低于 5 秒。
 - `meme_manager_curate_enabled` / `meme_manager_curate_interval_minutes` / `meme_manager_curate_batch_size`
-  - 默认开启，每 60 分钟由图片模型实际读图整理一批 12 张，优先处理从未被模型读过的图；图库达到上限时立即补一批整理，不再静默停止收集。整理时只保留可爱、萌的表情，把不合适的图移入 `trash` 回收目录。
+  - 默认开启，每 15 分钟最多读图 60 张，按“从没打过分 → 分数过期”顺序消化；没有待打分的图时空转不读图。分类超过配额时把排名最低的移入 `archive` 对应分类，一张不删。
+- 分类配额写在 `meme_manager/library_plan.py` 的 `CATEGORY_QUOTAS`：主力情绪 20 张、一般 12 张、冷门 6 张，共 27 类 390 张。同文件的 `CATEGORY_MERGES` 和 `CATEGORY_ARCHIVE_ALL` 决定旧分类怎么合并、哪些分类整类归档。
+- 评分维度：萌度 0-40、表达力 0-25、画质 0-20、群聊可用 0-15；可用分为 0 的图直接归档。排序分 = 总分 + 新鲜加成（入库 7 天内 +10、8-30 天 +5、之后 0）。分类满了再收新图时，分差超过 5 分直接换，5 分以内才让模型看最低 2 张加新图挑。
 - `meme_manager_send_check_enabled` / `meme_manager_send_check_timeout_seconds`
   - 默认开启，选中表情后必须由图片模型实际读图确认才发送，不依赖图库标题或描述；读图超时或未通过则本次不发该表情，并把该图标记为停用。
 - `meme_manager_review_cache_hours`
   - 默认 168 小时；模型实际读图得出的结论在该时长内复用，到期后重新读图确认。
+- `meme_manager_score_valid_days`
+  - 默认 90 天；分数在该时长内直接用于配额排序，到期后重新读图打分。评分标准变化时改代码里的 `SCORE_VERSION`，旧分自动失效。
 - `meme_manager_webui_port`
   - 表情管理后台端口，默认 5000；后台只通过 `表情管理 开启管理后台` 启动。
 - `meme_manager_enable_mixed_message`
@@ -288,7 +292,7 @@
 - 使用 `data\plugin_data\qqbot_features_runtime` 作为游戏、Arcaea、RightCodes 积分和本地 artifact 发布状态目录；游戏、Arcaea 会话/缓存、复读/thunder/Lolicon 群配置、Shapez 群文件清理状态和 RightCodes 积分优先写入 `db\qqbot_features.sqlite3`。
 - JM 下载图片、构建中间产物和每次发送的加密 PDF 副本只写入 AstrBot Core temp 下的 `qqbot_features\jmcomic\`，完成、失败或超时后清理。未加密标准 PDF 持久保存在 `qqbot_features_runtime\comic_pdf_cache\JM<作品ID>-【作者】标题\`；每目录只有 `metadata.json` 和一个或多个校验过的 PDF，默认受 10 GiB LRU 上限约束。
 - Lolicon 元数据写入 `db\lolicon.sqlite3`，图片不再下载到本地；菜单图、Arc 猜歌面板、shapez 渲染图和临时面板写入 AstrBot Core 的 `data\temp\qqbot_features\` 子目录，进入 Core `temp_dir_max_size` 容量清理范围。插件后台只删除超过安全窗口的重复图片副本，不做独立按日期清理；旧 AI 记忆、TTS、头像和 shapez 静态旧目录不再作为日常运行态保留。
-- 使用 `data\plugin_data\meme_manager` 作为本地表情包运行态目录；这是兼容保留的数据路径，不再对应独立 AstrBot 插件。模型整理判定不合格的表情包移动到 `data\plugin_data\meme_manager\trash\<时间戳>\<分类>\`，需要时可人工取回。
+- 使用 `data\plugin_data\meme_manager` 作为本地表情包运行态目录；这是兼容保留的数据路径，不再对应独立 AstrBot 插件。图库不删图：超过配额、判定不合格或竞争失败的表情包按原分类移入 `data\plugin_data\meme_manager\archive\<分类>\`，同目录 `archive.json` 记录总分、四个分项、归档原因和时间，需要时可按分类和分数取回。
 - 旧公开群上下文快照不再作为 prompt 事实源，也不提供群聊记录导出命令。
 - 不提交运行态数据、QQ 登录态、token、数据库或日志。
 - RightCodes API Key 直接填写在本插件配置字段 `api_key`，不写入插件源码，也不再读取旧 `.env`。
