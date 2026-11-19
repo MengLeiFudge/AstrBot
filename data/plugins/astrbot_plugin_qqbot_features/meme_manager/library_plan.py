@@ -218,8 +218,13 @@ def archive_image(category: str, filename: str, *, reason: str, note: str = "") 
     except Exception as exc:
         logger.warning("[MemeArchive] archive failed: error_type=%s", type(exc).__name__)
         return False
+    dropped = _drop_index_entry(category, name)
+    if isinstance(dropped, dict):
+        # 归档记录带上描述和分数，以后需要恢复时不用重读图
+        record["title"] = dropped.get("title")
+        record["score"] = dropped.get("score")
+        record["added_at"] = dropped.get("added_at")
     _append_manifest(target_dir, record)
-    _drop_index_entry(category, name)
     logger.info("[MemeArchive] archived: category=%s filename=%s reason=%s", category, name, reason)
     return True
 
@@ -436,19 +441,23 @@ def _append_manifest(target_dir: Path, record: dict) -> None:
         logger.warning("[MemeArchive] manifest write failed: error_type=%s", type(exc).__name__)
 
 
-def _drop_index_entry(category: str, filename: str) -> None:
-    """Remove one image entry from the library index."""
+def _drop_index_entry(category: str, filename: str) -> dict | None:
+    """Remove one image entry from the library index and return it."""
     index = load_meme_index()
-    index["images"] = [
-        entry
-        for entry in index.get("images", [])
-        if not (
+    dropped = None
+    kept = []
+    for entry in index.get("images", []):
+        if (
             isinstance(entry, dict)
             and entry.get("category") == category
             and entry.get("filename") == filename
-        )
-    ]
+        ):
+            dropped = entry
+            continue
+        kept.append(entry)
+    index["images"] = kept
     save_meme_index(index)
+    return dropped
 
 
 def _is_supported(filename: str) -> bool:
