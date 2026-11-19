@@ -203,14 +203,18 @@ def archive_image(category: str, filename: str, *, reason: str, note: str = "") 
     source = Path(MEMES_DIR) / category / name
     target_dir = ARCHIVE_DIR / category
     record = _archive_record(category, name, reason, note)
+    if not source.is_file():
+        # 文件已经不在了：只清掉指向它的索引条目，不写归档清单
+        logger.warning("[MemeArchive] source missing: category=%s filename=%s", category, name)
+        _drop_index_entry(category, name)
+        return False
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        if source.is_file():
-            target = target_dir / name
-            if target.exists():
-                target = target_dir / f"{Path(name).stem}-{int(time.time())}{Path(name).suffix}"
-            shutil.move(str(source), str(target))
-            record["filename"] = target.name
+        target = target_dir / name
+        if target.exists():
+            target = target_dir / f"{Path(name).stem}-{int(time.time())}{Path(name).suffix}"
+        shutil.move(str(source), str(target))
+        record["filename"] = target.name
     except Exception as exc:
         logger.warning("[MemeArchive] archive failed: error_type=%s", type(exc).__name__)
         return False
