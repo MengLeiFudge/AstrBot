@@ -180,7 +180,8 @@ def trim_category(category: str) -> int:
     if excess <= 0:
         return 0
     scored = [entry for entry in members if isinstance(entry.get("score"), dict)]
-    if not scored:
+    if len(scored) < len(members):
+        # 还有没打分的图，等它们打完再决定，否则会把好图换掉
         return 0
     scored.sort(key=rank_of)
     archived = 0
@@ -363,8 +364,10 @@ def _append_manifest(target_dir: Path, record: dict) -> None:
         except Exception:
             records = []
     records.append(record)
+    temporary = path.with_suffix(".tmp")
     try:
-        path.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
     except Exception as exc:
         logger.warning("[MemeArchive] manifest write failed: error_type=%s", type(exc).__name__)
 
