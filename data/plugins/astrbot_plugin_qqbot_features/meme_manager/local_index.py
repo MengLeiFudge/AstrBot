@@ -285,6 +285,43 @@ def remove_image_metadata(category: str, filename: str) -> None:
     save_meme_index(index)
 
 
+def find_image_entry(category: str, filename: str) -> dict[str, Any] | None:
+    index = load_meme_index()
+    return _find_entry(index, category, Path(filename).name)
+
+
+def record_image_review(
+    category: str,
+    filename: str,
+    *,
+    verdict: str,
+    cute_score: int = 0,
+    by: str = "",
+    caption: str = "",
+    auto_send_enabled: bool | None = None,
+) -> dict[str, Any] | None:
+    """记录模型实际读图得出的结论，供后续发送复用。"""
+    index = load_meme_index()
+    entry = _find_entry(index, category, Path(filename).name)
+    if entry is None:
+        return None
+    if caption:
+        entry["title"] = caption[:80]
+        entry["content_caption"] = caption[:300]
+    if cute_score:
+        entry["cute_score"] = max(1, min(5, int(cute_score)))
+    if auto_send_enabled is not None:
+        entry["auto_send_enabled"] = bool(auto_send_enabled)
+    entry["review"] = {
+        "verdict": str(verdict),
+        "cute_score": int(entry.get("cute_score") or 0),
+        "by": str(by),
+        "at": int(time.time()),
+    }
+    save_meme_index(index)
+    return entry
+
+
 def move_image_metadata(source_category: str, filename: str, target_category: str, target_filename: str | None = None) -> None:
     index = load_meme_index()
     entry = _find_entry(index, source_category, filename)

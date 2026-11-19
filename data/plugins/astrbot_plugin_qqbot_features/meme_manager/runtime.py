@@ -10,6 +10,7 @@ import tempfile
 import time
 import traceback
 from multiprocessing import Process
+from pathlib import Path
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
@@ -37,6 +38,7 @@ from .backend.models import (
 )
 from .commands import MemeManagerCommand
 from .collector import MemeAutoCollector
+from .curator import MemeCurator
 from .config import DEFAULT_CATEGORY_DESCRIPTIONS, MEMES_DATA_PATH, MEMES_DIR
 from .init import init_plugin
 from .local_index import select_meme_for_emotion
@@ -161,11 +163,21 @@ class MemeManagerRuntime:
         )
         self.emotion_llm_enabled = _bool_config(self.config, "emotion_llm_enabled", False)
         self.emotion_llm_provider_id = str(_config_get(self.config, "emotion_llm_provider_id", "") or "")
+        self.curator = MemeCurator(
+            context,
+            enabled=_bool_config(self.config, "curate_enabled", True),
+            interval_seconds=_int_config(self.config, "curate_interval_minutes", 60, minimum=5) * 60,
+            batch_size=_int_config(self.config, "curate_batch_size", 12, minimum=1),
+            send_check_enabled=_bool_config(self.config, "send_check_enabled", True),
+            review_ttl_seconds=_int_config(self.config, "review_cache_hours", 168, minimum=1) * 3600,
+            send_timeout_seconds=_int_config(self.config, "send_check_timeout_seconds", 8, minimum=1),
+        )
         self.auto_collector = MemeAutoCollector(
             context,
             enabled=_bool_config(self.config, "auto_collect_enabled", True),
             interval_seconds=_int_config(self.config, "auto_collect_interval_seconds", 60, minimum=5),
             max_images=_int_config(self.config, "auto_collect_max_images", 1000, minimum=1),
+            curator=self.curator,
         )
 
         # 混合消息相关配置
@@ -1268,6 +1280,22 @@ class MemeManagerRuntime:
             logger.error(f"[meme_manager] 转换图片为 GIF 失败: {e}")
             return image_path
 
+    def start_background_tasks(self) -> None:
+        """启动图库整理循环，重复调用无副作用。"""
+        self.curator.start()
+
+    async def _select_sendable_meme(
+        self, event: AstrMessageEvent, emotion: str, context_text: str
+    ) -> Path | None:
+        """选一张模型实际读图确认过的表情，未确认通过的不发。"""
+        for _ in range(2):
+            meme_path = select_meme_for_emotion(emotion, context_text=context_text)
+            if meme_path is None:
+                return None
+            if await self.curator.verify_for_send(meme_path, event.unified_msg_origin):
+                return meme_path
+        return None
+
     def _build_meme_context_text(
         self, event: AstrMessageEvent, components: list | None = None
     ) -> str:
@@ -1312,9 +1340,8 @@ class MemeManagerRuntime:
                 if not emotion:
                     continue
 
-                meme_path = select_meme_for_emotion(
-                    emotion,
-                    context_text=self._build_meme_context_text(event),
+                meme_path = await self._select_sendable_meme(
+                    event, emotion, self._build_meme_context_text(event)
                 )
                 if meme_path is None:
                     continue
@@ -1412,11 +1439,10 @@ class MemeManagerRuntime:
                         if not emotion:
                             continue
 
-                        meme_path = select_meme_for_emotion(
+                        meme_path = await self._select_sendable_meme(
+                            event,
                             emotion,
-                            context_text=self._build_meme_context_text(
-                                event, cleaned_components
-                            ),
+                            self._build_meme_context_text(event, cleaned_components),
                         )
                         if meme_path is None:
                             continue
@@ -1913,6 +1939,7 @@ class MemeManagerRuntime:
     async def terminate(self):
         """Cancel local collection and release runtime resources."""
         await self.auto_collector.close()
+        await self.curator.close()
         # 恢复人格
         personas = self.context.provider_manager.personas
         for persona, persona_backup in zip(personas, self.persona_backup):

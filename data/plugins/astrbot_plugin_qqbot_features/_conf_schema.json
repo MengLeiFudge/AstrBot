@@ -185,6 +185,42 @@
     "default": 1000,
     "hint": "本地图库达到此图片总数后停止自动收集，保留已有图片和手动管理功能。单张自动收集图片上限为 5 MiB、2000 万像素和 300 帧。"
   },
+  "meme_manager_curate_enabled": {
+    "description": "模型定期整理图库",
+    "type": "bool",
+    "default": true,
+    "hint": "后台按批次实际读图复核本地图库：只留可爱、萌的表情，把擦边、脱衣梗、恐怖、真人照片、截图、广告和模糊低清的图移入 plugin_data/meme_manager/trash。"
+  },
+  "meme_manager_curate_interval_minutes": {
+    "description": "图库整理间隔（分钟）",
+    "type": "int",
+    "default": 60,
+    "hint": "两次后台整理的最短间隔，最低 5 分钟；图库满时不等间隔，立刻补一批整理。"
+  },
+  "meme_manager_curate_batch_size": {
+    "description": "单批整理图片数",
+    "type": "int",
+    "default": 12,
+    "hint": "每次整理实际读图的张数，优先处理从未被模型读过的图；读完一批再等下一个间隔。"
+  },
+  "meme_manager_send_check_enabled": {
+    "description": "发送前实际读图确认",
+    "type": "bool",
+    "default": true,
+    "hint": "选中表情后由图片模型读图判断能不能发，不依赖图库标题或描述；不通过就不发，并停用该图。"
+  },
+  "meme_manager_send_check_timeout_seconds": {
+    "description": "发送前读图超时（秒）",
+    "type": "int",
+    "default": 8,
+    "hint": "读图超过该时间视为未确认，本次不发这张表情，不影响文字回复。"
+  },
+  "meme_manager_review_cache_hours": {
+    "description": "读图结论复用时长（小时）",
+    "type": "int",
+    "default": 168,
+    "hint": "模型实际读图得出的结论在该时长内直接复用，避免每次发送都重新读图；到期后重新读图确认。"
+  },
   "meme_manager_webui_port": {
     "description": "表情管理后台端口",
     "type": "int",

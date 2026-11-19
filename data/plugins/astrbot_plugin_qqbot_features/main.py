@@ -537,6 +537,7 @@ class QQBotFeaturesPlugin(Star):
         self._temp_duplicate_cleanup_task = asyncio.create_task(
             self._temp_duplicate_cleaner.run(logger=logger)
         )
+        self._meme_runtime.start_background_tasks()
 
     async def terminate(self) -> None:
         await self._comic_pdf_service.shutdown()
