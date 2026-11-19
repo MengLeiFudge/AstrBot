@@ -185,6 +185,12 @@
     "default": 400,
     "hint": "每个分类有自己的配额（20/12/6，合计 390），这里是整体兵底：达到该总数后不再新增，即使某个分类还没满。单张自动收集图片上限为 5 MiB、2000 万像素和 300 帧。"
   },
+  "meme_manager_meme_entry_min_score": {
+    "description": "新表情入库及格线",
+    "type": "int",
+    "default": 55,
+    "hint": "新图四项分合计（萌度 40 + 表达力 25 + 画质 20 + 群聊可用 15，满分 100）达到该分数才可能入库，低于它直接丢掉；分类满额后还要和现有图比排名。"
+  },
   "meme_manager_curate_enabled": {
     "description": "模型按配额整理图库",
     "type": "bool",

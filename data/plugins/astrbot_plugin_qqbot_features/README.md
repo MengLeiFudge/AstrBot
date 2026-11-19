@@ -255,13 +255,16 @@
 - `source_knowledge_max_results` / `source_knowledge_max_chars`
   - 默认 `4` / `2600`。源码知识按低成本运行，需要追查大文件或更完整源码证据时再临时调高。
 - `meme_manager_auto_collect_enabled`
-  - 默认开启，后台只收藏可爱、萌的动漫表情包到本地图库；擦边、脱衣或暴露梗、恐怖血腥、真人照片、截图、广告和模糊低清的图不收藏。
+  - 默认开启，后台把群聊里出现的新图读一遍再决定收不收：可爱软萌是加分项而不是唯一标准，有棗、表达清楚、画质干净的图都可以收；擦边、脱衣或暴露梗、恐怖血腥、真人照片、截图、广告和模糊低清的图不收藏。
 - `meme_manager_auto_collect_interval_seconds` / `meme_manager_auto_collect_max_images`
   - 默认最短分析间隔 60 秒；`max_images` 是图库总量硬上限，默认 400 张，只作兵底，日常由分类配额控制。最短间隔不能低于 5 秒。
+- `meme_manager_meme_entry_min_score`
+  - 默认 55（满分 100）；新图四项分合计达到该分数才可能入库，低于它直接丢掉。分类满额后还要和现有图比排名，分类里还有没打完分的图时先收下，等打分批次统一裁。
 - `meme_manager_curate_enabled` / `meme_manager_curate_interval_minutes` / `meme_manager_curate_batch_size`
   - 默认开启，每 15 分钟最多读图 60 张，按“从没打过分 → 分数过期”顺序消化；没有待打分的图时空转不读图。分类超过配额时把排名最低的移入 `archive` 对应分类，一张不删。
 - 分类配额写在 `meme_manager/library_plan.py` 的 `CATEGORY_QUOTAS`：主力情绪 20 张、一般 12 张、冷门 6 张，共 27 类 390 张。同文件的 `CATEGORY_MERGES` 和 `CATEGORY_ARCHIVE_ALL` 决定旧分类怎么合并、哪些分类整类归档。
 - 评分维度：萌度 0-40、表达力 0-25、画质 0-20、群聊可用 0-15；可用分为 0 的图直接归档。排序分 = 总分 + 新鲜加成（入库 7 天内 +10、8-30 天 +5、之后 0）。分类满了再收新图时，分差超过 5 分直接换，5 分以内才让模型看最低 2 张加新图挑。
+- 新图入库前先查重：内容 sha256 相同的直接跳过；感知哈希（dHash）汉明距离 6 以内的当作同一张图（能拓 QQ 重压缩）；同分类描述相似度 0.7 以上的当作同款，只保留分高的那张。
 - `meme_manager_send_check_enabled` / `meme_manager_send_check_timeout_seconds`
   - 默认开启，选中表情后必须由图片模型实际读图确认才发送，不依赖图库标题或描述；读图超时或未通过则本次不发该表情，并把该图标记为停用。
 - `meme_manager_review_cache_hours`

@@ -178,7 +178,8 @@ class MemeManagerRuntime:
             context,
             enabled=_bool_config(self.config, "auto_collect_enabled", True),
             interval_seconds=_int_config(self.config, "auto_collect_interval_seconds", 60, minimum=5),
-            max_images=_int_config(self.config, "auto_collect_max_images", 1000, minimum=1),
+            max_images=_int_config(self.config, "auto_collect_max_images", 400, minimum=1),
+            min_total=_int_config(self.config, "meme_entry_min_score", 55, minimum=0, maximum=100),
             curator=self.curator,
         )
 

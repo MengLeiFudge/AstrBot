@@ -20,6 +20,7 @@ from .config import MEMES_DIR
 from .library_plan import (
     SCORE_VERSION,
     archive_image,
+    image_phash,
     rank_of,
     trim_category,
 )
@@ -28,12 +29,14 @@ from .local_index import (
     load_meme_index,
     record_image_review,
     record_image_score,
+    save_meme_index,
 )
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
 PREVIEW_SIZE = (768, 768)
 REVIEW_TIMEOUT_SECONDS = 120
+PHASH_BACKFILL_LIMIT = 200
 
 SCORING_SYSTEM_PROMPT = (
     "你是云栖的本地表情图库评分员，给这张表情打分，判断它在群聊里长期反复使用的价值。"
@@ -163,6 +166,7 @@ class MemeCurator:
         if not self._enabled or self._closed:
             return stats
         async with self._batch_lock:
+            _backfill_phashes(PHASH_BACKFILL_LIMIT)
             targets = self._pick_targets()
             if not targets:
                 return stats
@@ -236,7 +240,9 @@ class MemeCurator:
         """
         category = str(entry.get("category") or "")
         filename = str(entry.get("filename") or "")
-        previews = _render_previews(Path(MEMES_DIR) / category / filename)
+        path = Path(MEMES_DIR) / category / filename
+        previews = _render_previews(path)
+        phash = image_phash(path.read_bytes())
         response = await self._context.llm_generate(
             chat_provider_id=provider_id,
             system_prompt=SCORING_SYSTEM_PROMPT,
@@ -269,6 +275,7 @@ class MemeCurator:
             usable=usable,
             version=SCORE_VERSION,
             caption=caption,
+            phash=phash,
         )
         return "scored", category
 
@@ -478,6 +485,33 @@ def _score_part(value: object, maximum: int) -> int:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ValueError("Meme score is missing")
     return max(0, min(maximum, int(value)))
+
+
+def _backfill_phashes(limit: int) -> int:
+    """Compute missing perceptual hashes locally so duplicate checks work on old images."""
+    index = load_meme_index()
+    filled = 0
+    for entry in index.get("images", []):
+        if filled >= limit:
+            break
+        if not isinstance(entry, dict) or entry.get("phash"):
+            continue
+        category = str(entry.get("category") or "")
+        filename = str(entry.get("filename") or "")
+        path = Path(MEMES_DIR) / category / filename
+        if not category or not filename or not path.is_file():
+            continue
+        try:
+            digest = image_phash(path.read_bytes())
+        except Exception:
+            continue
+        if digest:
+            entry["phash"] = digest
+            filled += 1
+    if filled:
+        save_meme_index(index)
+        logger.info("[MemeCurator] filled %s perceptual hashes", filled)
+    return filled
 
 
 def _render_previews(path: Path) -> list[str]:

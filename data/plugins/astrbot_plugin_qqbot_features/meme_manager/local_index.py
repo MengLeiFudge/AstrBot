@@ -332,6 +332,7 @@ def record_image_score(
     usable: int,
     version: int,
     caption: str = "",
+    phash: str = "",
 ) -> dict[str, Any] | None:
     """记录模型实际读图得出的分项分数，供配额排序复用。"""
     index = load_meme_index()
@@ -343,6 +344,8 @@ def record_image_score(
         entry["title"] = caption[:80]
         entry["content_caption"] = caption[:300]
     entry.setdefault("added_at", now)
+    if phash:
+        entry["phash"] = str(phash)
     entry["score"] = {
         "total": int(cute) + int(expressive) + int(quality) + int(usable),
         "cute": int(cute),

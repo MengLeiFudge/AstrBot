@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import json
+import re
 import shutil
 import time
 from pathlib import Path
+
+from PIL import Image as PILImage
 
 from astrbot.api import logger
 
@@ -18,6 +22,9 @@ ARCHIVE_MANIFEST_NAME = "archive.json"
 SCORE_VERSION = 1
 DEFAULT_QUOTA = 12
 TIE_MARGIN = 5.0
+MIN_ENTRY_TOTAL = 55
+CAPTION_SIMILARITY = 0.7
+PHASH_MAX_DISTANCE = 6
 
 CATEGORY_QUOTAS: dict[str, int] = {
     # 主力情绪
@@ -125,6 +132,59 @@ def rank_of(entry: dict) -> float:
     score = entry.get("score")
     total = float(score.get("total") or 0) if isinstance(score, dict) else 0.0
     return total + recency_bonus(entry)
+
+
+def total_of(entry: dict) -> int:
+    """Return the stored total score of one entry, or 0 when it has none."""
+    score = entry.get("score")
+    return int(score.get("total") or 0) if isinstance(score, dict) else 0
+
+
+def image_phash(content: bytes) -> str:
+    """Return a 64-bit difference hash of the first frame, or empty when unreadable."""
+    try:
+        with PILImage.open(io.BytesIO(content)) as image:
+            with image.convert("L").resize((9, 8)) as small:
+                pixels = list(small.getdata())
+    except Exception:
+        return ""
+    bits = 0
+    for row in range(8):
+        for column in range(8):
+            bits = (bits << 1) | (1 if pixels[row * 9 + column] > pixels[row * 9 + column + 1] else 0)
+    return f"{bits:016x}"
+
+
+def phash_distance(left: str, right: str) -> int:
+    """Return the Hamming distance of two stored hashes, or 64 when unusable."""
+    try:
+        return bin(int(left, 16) ^ int(right, 16)).count("1")
+    except (TypeError, ValueError):
+        return 64
+
+
+def find_similar_caption(category: str, caption: str, entries: list[dict]) -> dict | None:
+    """Return a same-category entry whose caption reads like the same joke."""
+    grams = _caption_grams(caption)
+    if not grams:
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict) or str(entry.get("category") or "") != category:
+            continue
+        other = _caption_grams(entry.get("title") or entry.get("content_caption") or "")
+        if not other:
+            continue
+        if len(grams & other) / len(grams | other) >= CAPTION_SIMILARITY:
+            return entry
+    return None
+
+
+def _caption_grams(caption: str) -> set[str]:
+    """Split a caption into character bigrams so wording noise is tolerated."""
+    text = re.sub(r"\s+", "", str(caption or ""))
+    if len(text) < 4:
+        return set()
+    return {text[index:index + 2] for index in range(len(text) - 1)}
 
 
 def archive_image(category: str, filename: str, *, reason: str, note: str = "") -> bool:
