@@ -14,6 +14,7 @@ FEATURE_RULES: tuple[str, ...] = (
     "用户询问功能、用法、价格或怎么操作时，按这份目录回答，并给出可以直接发送的指令原文。",
     "目录只列用户可以直接发送的指令；理解图片、视频、引用消息和长文是对话能力，不在这份清单里，不要因为没列出来就否认。",
     "目录里没有的能力不要编造指令名，可以引导用户发送“菜单”查看分类。",
+    "目录里列出的都是本 bot 已启用的功能；用户问能不能用、怎么用时照实说明，不要以“没有这个功能”为由拒接。",
 )
 FEATURE_INDEX_MAX_CHARS = 1200
 FEATURE_DETAIL_MAX_ENTRIES = 3
@@ -133,6 +134,17 @@ COMMAND_FEATURE_ENTRIES: tuple[FeatureEntry, ...] = (
         ),
         priority=10,
     ),
+    FeatureEntry(
+        name="JM漫画",
+        hint="jm<作品ID>；好友限定，成品私聊发密码压缩包",
+        aliases=("jm漫画", "jm", "漫画", "pdf", "禁漫"),
+        commands=(
+            "jm<作品ID>：例如 jm422389。好友限定，群聊或私聊发送都可以。",
+            "下载完成后成品通过私聊以密码压缩包发送，先收到标题、切片数和密码；状态消息不带引用。",
+        ),
+        notes=("这是本 bot 已启用的功能，用户问能不能下载或怎么用时照实说明用法。",),
+        priority=10,
+    ),
 )
 
 
@@ -151,7 +163,10 @@ def _section_hint(section: MenuSection) -> str:
 
 def _section_feature_entries() -> tuple[FeatureEntry, ...]:
     entries: list[FeatureEntry] = []
+    covered_names = {entry.name for entry in COMMAND_FEATURE_ENTRIES}
     for section in MENU_SECTIONS:
+        if section.name in covered_names:
+            continue
         hint = _section_hint(section)
         entries.append(
             FeatureEntry(
