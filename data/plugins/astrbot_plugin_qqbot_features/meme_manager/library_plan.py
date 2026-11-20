@@ -14,7 +14,7 @@ from PIL import Image as PILImage
 from astrbot.api import logger
 
 from .config import MEMES_DATA_PATH, MEMES_DIR, PLUGIN_DATA_DIR
-from .local_index import load_meme_index, save_meme_index, upsert_image_metadata
+from .local_index import load_meme_index, record_image_score, save_meme_index, upsert_image_metadata
 
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 ARCHIVE_DIR = Path(PLUGIN_DATA_DIR) / "archive"
@@ -147,26 +147,6 @@ def quota_of(category: str) -> int:
     return CATEGORY_QUOTAS.get(category, DEFAULT_QUOTA)
 
 
-def recency_bonus(entry: dict) -> float:
-    """Return the freshness bonus that lets new memes compete with old ones.
-
-    Args:
-        entry: Library index entry.
-
-    Returns:
-        Bonus added to the stored score; it fades out as the image ages.
-    """
-    added_at = float(entry.get("added_at") or 0)
-    if not added_at:
-        return 0.0
-    age_days = max(0.0, (time.time() - added_at) / 86400)
-    if age_days < 7:
-        return 10.0
-    if age_days < 30:
-        return 5.0
-    return 0.0
-
-
 def rank_of(entry: dict) -> float:
     """Return the ranking value used to compare memes inside one category.
 
@@ -174,11 +154,10 @@ def rank_of(entry: dict) -> float:
         entry: Library index entry.
 
     Returns:
-        Stored total score plus freshness bonus; unscored entries rank lowest.
+        Stored total score; unscored entries rank lowest.
     """
     score = entry.get("score")
-    total = float(score.get("total") or 0) if isinstance(score, dict) else 0.0
-    return total + recency_bonus(entry)
+    return float(score.get("total") or 0) if isinstance(score, dict) else 0.0
 
 
 def total_of(entry: dict) -> int:
@@ -502,6 +481,100 @@ def enforce_quotas() -> dict[str, int]:
     return trimmed
 
 
+def restore_image(category: str, filename: str, *, target_category: str = "") -> bool:
+    """Move one archived image back into the library, keeping its description and score."""
+    name = Path(filename).name
+    source = ARCHIVE_DIR / category / name
+    target = target_category or category
+    target_dir = Path(MEMES_DIR) / target
+    if not source.is_file():
+        logger.warning("[MemeArchive] archived file missing: category=%s filename=%s", category, name)
+        return False
+    record = _pop_manifest_record(category, name)
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        destination = target_dir / name
+        if destination.exists():
+            destination = target_dir / f"{Path(name).stem}-{int(time.time())}{Path(name).suffix}"
+        shutil.move(str(source), str(destination))
+    except Exception as exc:
+        logger.warning("[MemeArchive] restore failed: error_type=%s", type(exc).__name__)
+        return False
+    title = str(record.get("title") or Path(name).stem)[:80]
+    upsert_image_metadata(target, destination.name, {
+        "title": title,
+        "content_caption": str(record.get("title") or title)[:300],
+        "emotion_tags": [target],
+        "auto_send_enabled": True,
+    })
+    score = record.get("score")
+    if isinstance(score, dict) and score.get("total"):
+        record_image_score(
+            target,
+            destination.name,
+            cute=int(score.get("cute") or 0),
+            expressive=int(score.get("expressive") or 0),
+            quality=int(score.get("quality") or 0),
+            usable=int(score.get("usable") or 0),
+            version=int(score.get("version") or SCORE_VERSION),
+            caption=title,
+        )
+    logger.info("[MemeArchive] restored: category=%s filename=%s", category, name)
+    return True
+
+
+def rebalance_category(category: str) -> int:
+    """Swap in an archived image when it clearly outscores the weakest library member."""
+    index = load_meme_index()
+    members = [
+        entry
+        for entry in index.get("images", [])
+        if isinstance(entry, dict)
+        and entry.get("category") == category
+        and isinstance(entry.get("score"), dict)
+    ]
+    if not members:
+        return 0
+    scored = [
+        record
+        for record in _read_manifest(category)
+        if isinstance(record.get("score"), dict) and record["score"].get("total")
+    ]
+    if not scored:
+        return 0
+    weakest = min(members, key=rank_of)
+    best = max(scored, key=rank_of)
+    if rank_of(best) <= rank_of(weakest):
+        return 0
+    if not archive_image(category, str(weakest.get("filename") or ""), reason="replaced_by_new"):
+        return 0
+    if not restore_image(category, str(best.get("filename") or "")):
+        return 0
+    logger.info(
+        "[MemeArchive] rebalanced: category=%s in=%s out=%s",
+        category, best.get("filename"), weakest.get("filename"),
+    )
+    return 1
+
+
+def rebalance_quotas() -> dict[str, int]:
+    """Bring archived images back when they outscore what is currently in the library."""
+    index = load_meme_index()
+    categories = {
+        str(entry.get("category") or "")
+        for entry in index.get("images", [])
+        if isinstance(entry, dict)
+    }
+    swapped: dict[str, int] = {}
+    for category in sorted(categories):
+        moved = rebalance_category(category)
+        if moved:
+            swapped[category] = moved
+    if swapped:
+        logger.info("[MemeArchive] rebalance sweep: %s", swapped)
+    return swapped
+
+
 def apply_category_plan() -> dict[str, int]:
     """Apply category merges and retire categories that must leave the library.
 
@@ -725,3 +798,40 @@ def _remove_empty_dir(path: Path) -> None:
         path.rmdir()
     except OSError:
         pass
+
+
+def _read_manifest(category: str) -> list[dict]:
+    """Return the archive records of one category."""
+    manifest = ARCHIVE_DIR / category / ARCHIVE_MANIFEST_NAME
+    if not manifest.is_file():
+        return []
+    try:
+        records = json.loads(manifest.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(records, list):
+        return []
+    return [record for record in records if isinstance(record, dict)]
+
+
+def _pop_manifest_record(category: str, filename: str) -> dict:
+    """Remove and return one record from a category archive manifest."""
+    manifest = ARCHIVE_DIR / category / ARCHIVE_MANIFEST_NAME
+    if not manifest.is_file():
+        return {}
+    try:
+        records = json.loads(manifest.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(records, list):
+        return {}
+    found: dict = {}
+    kept: list = []
+    for record in records:
+        if isinstance(record, dict) and record.get("filename") == filename and not found:
+            found = record
+            continue
+        kept.append(record)
+    if found:
+        manifest.write_text(json.dumps(kept, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return found

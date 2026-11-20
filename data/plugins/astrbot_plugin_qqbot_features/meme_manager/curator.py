@@ -28,6 +28,7 @@ from .library_plan import (
     image_phash,
     move_to_private_category,
     rank_of,
+    rebalance_quotas,
     send_to_review,
 )
 from .local_index import (
@@ -184,6 +185,8 @@ class MemeCurator:
             _backfill_phashes(PHASH_BACKFILL_LIMIT)
             swept = enforce_quotas()
             stats["trimmed"] += sum(swept.values())
+            # 归档里分数明显更高的图换回来，避免旧图靠没分时期落进归档
+            stats["trimmed"] += sum(rebalance_quotas().values())
             targets = self._pick_targets()
             if not targets:
                 return stats
