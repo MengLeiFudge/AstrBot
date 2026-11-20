@@ -147,6 +147,15 @@ def quota_of(category: str) -> int:
     return CATEGORY_QUOTAS.get(category, DEFAULT_QUOTA)
 
 
+def recency_bonus(entry: dict) -> float:
+    """Return the freshness bonus: 15 points on day one, losing 0.5 a day until zero."""
+    added_at = float(entry.get("added_at") or 0)
+    if not added_at:
+        return 0.0
+    age_days = max(0.0, (time.time() - added_at) / 86400)
+    return round(max(0.0, 15.0 - 0.5 * age_days), 1)
+
+
 def rank_of(entry: dict) -> float:
     """Return the ranking value used to compare memes inside one category.
 
@@ -154,10 +163,11 @@ def rank_of(entry: dict) -> float:
         entry: Library index entry.
 
     Returns:
-        Stored total score; unscored entries rank lowest.
+        Stored total score plus freshness bonus; unscored entries rank lowest.
     """
     score = entry.get("score")
-    return float(score.get("total") or 0) if isinstance(score, dict) else 0.0
+    total = float(score.get("total") or 0) if isinstance(score, dict) else 0.0
+    return total + recency_bonus(entry)
 
 
 def total_of(entry: dict) -> int:
