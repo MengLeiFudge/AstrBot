@@ -32,6 +32,7 @@ from .library_plan import (
     SCORE_VERSION,
     TIE_MARGIN,
     archive_image,
+    delete_image,
     ensure_private_category,
     find_similar_caption,
     image_phash,
@@ -279,10 +280,10 @@ class MemeAutoCollector:
             return
         if self._admit(category, members, content, extension, caption, scores, digest, phash):
             if similar is not None and total_of(similar) > 0:
-                archive_image(
+                # 内容重复的旧图直接删，不堆到归档里
+                delete_image(
                     str(similar.get("category") or category),
                     str(similar.get("filename") or ""),
-                    reason="duplicate_caption",
                 )
         self._seen[key] = None
         if len(self._seen) > MAX_SEEN_IMAGES:

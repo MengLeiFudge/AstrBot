@@ -20,11 +20,14 @@ from .config import MEMES_DIR
 from .library_plan import (
     ARCHIVE_RULES,
     PRIVATE_RULES,
+    REVIEW_RULES,
     SCORE_VERSION,
     archive_image,
+    delete_image,
     image_phash,
     move_to_private_category,
     rank_of,
+    send_to_review,
 )
 from .local_index import (
     find_image_entry,
@@ -273,7 +276,15 @@ class MemeCurator:
                 # 色情或暧昧图不删，迁入云栖不自动发送的私密分类
                 if move_to_private_category(category, filename, rule=rule):
                     return "archived", category
-            archive_image(category, filename, reason="unfit", rule=rule)
+            elif rule in REVIEW_RULES:
+                # 风控不合格的图进审核队列，不混在低分归档里
+                if send_to_review(category, filename, rule=rule):
+                    return "queued", category
+            elif rule == "duplicate":
+                # 重复的直接删，不留副本
+                if delete_image(category, filename):
+                    return "deleted", category
+            archive_image(category, filename, reason="low_score", rule=rule)
             return "archived", category
 
         caption = decision.get("caption")

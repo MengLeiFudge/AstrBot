@@ -262,8 +262,8 @@
   - 默认 55（满分 100）；新图四项分合计达到该分数才可能入库，低于它直接丢掉。分类满额后还要和现有图比排名，分类里还有没打完分的图时先收下，等打分批次统一裁。
 - `meme_manager_curate_enabled` / `meme_manager_curate_interval_minutes` / `meme_manager_curate_batch_size`
   - 默认开启，每 15 分钟最多读图 60 张，按“从没打过分 → 分数过期”顺序消化；没有待打分的图时空转不读图。分类超过配额时把排名最低的移入 `archive` 对应分类，一张不删。
-- 分类配额写在 `meme_manager/library_plan.py` 的 `CATEGORY_QUOTAS`：主力情绪 20 张、一般 12 张、冷门 6 张，共 27 类 390 张。同文件的 `CATEGORY_MERGES` 和 `CATEGORY_ARCHIVE_ALL` 决定旧分类怎么合并、哪些分类整类归档。
-- 评分维度：萌度 0-40、表达力 0-25、画质 0-20、群聊可用 0-15；可用分为 0 的图直接归档。排序分 = 总分 + 新鲜加成（入库 7 天内 +10、8-30 天 +5、之后 0）。分类满了再收新图时，分差超过 5 分直接换，5 分以内才让模型看最低 2 张加新图挑。
+- 分类配额写在 `meme_manager/library_plan.py` 的 `CATEGORY_QUOTAS`：主力情绪 20 张、一般 12 张、冷门 6 张，共 27 类 390 张。同文件的 `CATEGORY_MERGES` 决定旧分类怎么合并；`CATEGORY_ARCHIVE_ALL` 里的退休分类不再整类归档，图统一并进 `see`，交给配额和打分决定去留。
+- 评分维度：萌度 0-40、表达力 0-25、画质 0-20、群聊可用 0-15；可用分为 0 的图按原因分流：色情暧昧迁入私密分类，风控不合格（恐怖血腥、真人、截图、广告、水印、认不出）进审核队列，重复的直接删，剩下画质低和分类不合适按低分归档。排序分 = 总分 + 新鲜加成（入库 7 天内 +10、8-30 天 +5、之后 0）。分类满了再收新图时，分差超过 5 分直接换，5 分以内才让模型看最低 2 张加新图挑。
 - 描述（caption）在模型认得出图里角色时以角色名开头，用通用中文译名（如初音未来、蕾姆、芙宁娜），后面接动作和情绪；认不出或不确定就不写名字，不猜。描述限 40 字。
 - 可用分为 0 的判定只看下面这份清单，清单外的东西不扣分；土味、尴尬、阴阳怪气、画风偏好这类口味问题都不算理由。
   1. 露点或裸露。
@@ -310,8 +310,8 @@
 - 使用 `data\plugin_data\qqbot_features_runtime` 作为游戏、Arcaea、RightCodes 积分和本地 artifact 发布状态目录；游戏、Arcaea 会话/缓存、复读/thunder/Lolicon 群配置、Shapez 群文件清理状态和 RightCodes 积分优先写入 `db\qqbot_features.sqlite3`。
 - JM 下载图片、构建中间产物和每次发送的加密 PDF 副本只写入 AstrBot Core temp 下的 `qqbot_features\jmcomic\`，完成、失败或超时后清理。未加密标准 PDF 持久保存在 `qqbot_features_runtime\comic_pdf_cache\JM<作品ID>-【作者】标题\`；每目录只有 `metadata.json` 和一个或多个校验过的 PDF，默认受 10 GiB LRU 上限约束。
 - Lolicon 元数据写入 `db\lolicon.sqlite3`，图片不再下载到本地；菜单图、Arc 猜歌面板、shapez 渲染图和临时面板写入 AstrBot Core 的 `data\temp\qqbot_features\` 子目录，进入 Core `temp_dir_max_size` 容量清理范围。插件后台只删除超过安全窗口的重复图片副本，不做独立按日期清理；旧 AI 记忆、TTS、头像和 shapez 静态旧目录不再作为日常运行态保留。
-- 使用 `data\plugin_data\meme_manager` 作为本地表情包运行态目录；这是兼容保留的数据路径，不再对应独立 AstrBot 插件。图库不删图：超过配额、判定不合格或竞争失败的表情包按原分类移入 `data\plugin_data\meme_manager\archive\<分类>\`，同目录 `archive.json` 记录总分、四个分项、归档原因和时间，需要时可按分类和分数取回。
-- 人工审核走本地服务 `.codex/drafts/review_server.py`（`http://127.0.0.1:8799`，或双击 `D:\Desktop\start-meme-review.bat`）：默认只列异常归档，正常挤出（超配额、被新图顶掉）不进待审列表；点删除立即删文件、点私密立即迁入对应私密分类、点恢复立即从列表消失并放进后台队列，几秒内归位（原分类还在就归原分类，退休分类才让模型判一次）；人工点过恢复的图直接记一张及格分，不再复审也不再参与后台打分。
+- 使用 `data\plugin_data\meme_manager` 作为本地表情包运行态目录；这是兼容保留的数据路径，不再对应独立 AstrBot 插件。归档只放低分图：超过配额、被新图顶掉、竞争失败的表情包按原分类移入 `data\plugin_data\meme_manager\archive\<分类>\`，同目录 `archive.json` 记录总分、四个分项、归档原因和时间，需要时可按分类和分数取回。风控不合格的图不进归档，另放 `review_queue\<分类>\`（`review.json` 记录规则），等人工定夺；重复图直接删文件，不留副本。
+- 人工审核走本地服务 `.codex/drafts/review_server.py`（`http://127.0.0.1:8799`，或双击 `D:\Desktop\start-meme-review.bat`）：只列风控待审图，低分归档（超配额、被新图顶掉）不进待审列表；点删除立即删文件、点私密立即迁入对应私密分类、点恢复立即从列表消失并放进后台队列，几秒内归位（原分类还在就归原分类，退休分类才让模型判一次）；人工点过恢复的图直接记一张及格分，不再复审也不再参与后台打分。
 - 旧公开群上下文快照不再作为 prompt 事实源，也不提供群聊记录导出命令。
 - 不提交运行态数据、QQ 登录态、token、数据库或日志。
 - RightCodes API Key 直接填写在本插件配置字段 `api_key`，不写入插件源码，也不再读取旧 `.env`。

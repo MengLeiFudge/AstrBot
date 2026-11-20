@@ -19,6 +19,18 @@ from .local_index import load_meme_index, save_meme_index, upsert_image_metadata
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 ARCHIVE_DIR = Path(PLUGIN_DATA_DIR) / "archive"
 ARCHIVE_MANIFEST_NAME = "archive.json"
+# 风控不合格的图不归档，单独进审核队列等人工定夺
+REVIEW_DIR = Path(PLUGIN_DATA_DIR) / "review_queue"
+REVIEW_MANIFEST_NAME = "review.json"
+REVIEW_RULES = (
+    "gore",
+    "real_person",
+    "screenshot",
+    "personal_info",
+    "ad",
+    "watermark",
+    "unrecognizable",
+)
 SCORE_VERSION = 1
 DEFAULT_QUOTA = 12
 TIE_MARGIN = 5.0
@@ -265,6 +277,50 @@ def archive_image(category: str, filename: str, *, reason: str, note: str = "", 
     return True
 
 
+def send_to_review(category: str, filename: str, *, rule: str, note: str = "") -> bool:
+    """Move a risk-flagged image into the review queue; the archive is only for low scores."""
+    name = Path(filename).name
+    source = Path(MEMES_DIR) / category / name
+    target_dir = REVIEW_DIR / category
+    if not source.is_file():
+        logger.warning("[MemeReview] source missing: category=%s filename=%s", category, name)
+        _drop_index_entry(category, name)
+        return False
+    record = _archive_record(category, name, "risk", note, rule)
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / name
+        if target.exists():
+            target = target_dir / f"{Path(name).stem}-{int(time.time())}{Path(name).suffix}"
+        shutil.move(str(source), str(target))
+        record["filename"] = target.name
+    except Exception as exc:
+        logger.warning("[MemeReview] queue failed: error_type=%s", type(exc).__name__)
+        return False
+    dropped = _drop_index_entry(category, name)
+    if isinstance(dropped, dict):
+        record["title"] = dropped.get("title")
+        record["score"] = dropped.get("score")
+        record["added_at"] = dropped.get("added_at")
+    _append_manifest(target_dir, record, manifest=REVIEW_MANIFEST_NAME)
+    logger.info("[MemeReview] queued: category=%s filename=%s rule=%s", category, name, rule)
+    return True
+
+
+def delete_image(category: str, filename: str) -> bool:
+    """Delete a duplicate image outright; neither archive nor review queue keeps a copy."""
+    name = Path(filename).name
+    path = Path(MEMES_DIR) / category / name
+    try:
+        path.unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("[MemeDelete] delete failed: error_type=%s", type(exc).__name__)
+        return False
+    _drop_index_entry(category, name)
+    logger.info("[MemeDelete] deleted: category=%s filename=%s", category, name)
+    return True
+
+
 def ensure_private_category() -> None:
     """Make sure every private category exists and never auto-sends from Cloud."""
     index = load_meme_index()
@@ -442,6 +498,7 @@ def apply_category_plan() -> dict[str, int]:
     }
     removed_keys: set[tuple[str, str]] = set()
 
+    see_dir = memes_root / "see"
     for category in CATEGORY_ARCHIVE_ALL:
         category_dir = memes_root / category
         if not category_dir.is_dir():
@@ -449,9 +506,17 @@ def apply_category_plan() -> dict[str, int]:
         for path in sorted(category_dir.iterdir()):
             if not path.is_file() or not _is_supported(path.name):
                 continue
-            if _move_to_archive(category, path.name, entries.get((category, path.name)), "category_retired"):
-                removed_keys.add((category, path.name))
-                stats["retired"] += 1
+            # 退休分类的图不打包归档，统一并进通用分类，交给配额和打分决定去留
+            see_dir.mkdir(parents=True, exist_ok=True)
+            target = see_dir / path.name
+            if target.exists():
+                target = see_dir / f"{Path(path.name).stem}-{int(time.time())}{Path(path.suffix)}"
+            shutil.move(str(path), str(target))
+            entry = entries.get((category, path.name))
+            if entry is not None:
+                entry["category"] = "see"
+                entry["relative_path"] = f"memes/see/{target.name}"
+            stats["retired"] += 1
         _remove_empty_dir(category_dir)
 
     for source, target in CATEGORY_MERGES.items():
@@ -464,9 +529,10 @@ def apply_category_plan() -> dict[str, int]:
             if not path.is_file() or not _is_supported(path.name):
                 continue
             if (target_dir / path.name).exists():
-                if _move_to_archive(source, path.name, entries.get((source, path.name)), "duplicate_after_merge"):
-                    removed_keys.add((source, path.name))
-                    stats["duplicate"] += 1
+                # 目标分类已有同名同内容文件，重复的直接删，不进归档
+                path.unlink(missing_ok=True)
+                removed_keys.add((source, path.name))
+                stats["duplicate"] += 1
                 continue
             shutil.move(str(path), str(target_dir / path.name))
             entry = entries.get((source, path.name))
@@ -589,9 +655,9 @@ def _archive_record(category: str, filename: str, reason: str, note: str, rule: 
     return record
 
 
-def _append_manifest(target_dir: Path, record: dict) -> None:
-    """Append one record to the archive manifest of a category."""
-    path = target_dir / ARCHIVE_MANIFEST_NAME
+def _append_manifest(target_dir: Path, record: dict, *, manifest: str = ARCHIVE_MANIFEST_NAME) -> None:
+    """Append one record to the archive or review manifest of a category."""
+    path = target_dir / manifest
     records: list = []
     if path.is_file():
         try:
