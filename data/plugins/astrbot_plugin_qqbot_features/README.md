@@ -311,7 +311,7 @@
 - JM 下载图片、构建中间产物和每次发送的加密 PDF 副本只写入 AstrBot Core temp 下的 `qqbot_features\jmcomic\`，完成、失败或超时后清理。未加密标准 PDF 持久保存在 `qqbot_features_runtime\comic_pdf_cache\JM<作品ID>-【作者】标题\`；每目录只有 `metadata.json` 和一个或多个校验过的 PDF，默认受 10 GiB LRU 上限约束。
 - Lolicon 元数据写入 `db\lolicon.sqlite3`，图片不再下载到本地；菜单图、Arc 猜歌面板、shapez 渲染图和临时面板写入 AstrBot Core 的 `data\temp\qqbot_features\` 子目录，进入 Core `temp_dir_max_size` 容量清理范围。插件后台只删除超过安全窗口的重复图片副本，不做独立按日期清理；旧 AI 记忆、TTS、头像和 shapez 静态旧目录不再作为日常运行态保留。
 - 使用 `data\plugin_data\meme_manager` 作为本地表情包运行态目录；这是兼容保留的数据路径，不再对应独立 AstrBot 插件。图库不删图：超过配额、判定不合格或竞争失败的表情包按原分类移入 `data\plugin_data\meme_manager\archive\<分类>\`，同目录 `archive.json` 记录总分、四个分项、归档原因和时间，需要时可按分类和分数取回。
-- 人工审核走本地服务 `.codex/drafts/review_server.py`（`http://127.0.0.1:8799`，或双击 `D:\Desktop\start-meme-review.bat`）：默认只列异常归档，正常挤出（超配额、被新图顶掉）不进待审列表；点删除立即删文件、点私密立即迁入对应私密分类、点恢复立即搬回图库并由模型自动判定归哪个分类，卡片随即从列表消失。
+- 人工审核走本地服务 `.codex/drafts/review_server.py`（`http://127.0.0.1:8799`，或双击 `D:\Desktop\start-meme-review.bat`）：默认只列异常归档，正常挤出（超配额、被新图顶掉）不进待审列表；点删除立即删文件、点私密立即迁入对应私密分类、点恢复立即从列表消失并放进后台队列，几秒内归位（原分类还在就归原分类，退休分类才让模型判一次）；人工点过恢复的图直接记一张及格分，不再复审也不再参与后台打分。
 - 旧公开群上下文快照不再作为 prompt 事实源，也不提供群聊记录导出命令。
 - 不提交运行态数据、QQ 登录态、token、数据库或日志。
 - RightCodes API Key 直接填写在本插件配置字段 `api_key`，不写入插件源码，也不再读取旧 `.env`。
