@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 import time
+import uuid
 from pathlib import Path
 
 from PIL import Image as PILImage
@@ -18,6 +19,21 @@ from .local_index import load_meme_index, record_image_score, save_meme_index, u
 
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 ARCHIVE_DIR = Path(PLUGIN_DATA_DIR) / "archive"
+_STAMP_SUFFIX = re.compile(r"(?:-\d{10})+$")
+
+
+def _unique_target(directory: Path, name: str) -> Path:
+    """Pick a free file name inside one directory without stacking timestamp suffixes."""
+    stem = _STAMP_SUFFIX.sub("", Path(name).stem) or Path(name).stem
+    suffix = Path(name).suffix
+    candidate = directory / f"{stem}{suffix}"
+    if not candidate.exists():
+        return candidate
+    for _ in range(20):
+        candidate = directory / f"{stem}-{uuid.uuid4().hex[:6]}{suffix}"
+        if not candidate.exists():
+            return candidate
+    return directory / f"{stem}-{uuid.uuid4().hex}{suffix}"
 ARCHIVE_MANIFEST_NAME = "archive.json"
 # 风控不合格的图不归档，单独进审核队列等人工定夺
 REVIEW_DIR = Path(PLUGIN_DATA_DIR) / "review_queue"
@@ -273,9 +289,7 @@ def archive_image(category: str, filename: str, *, reason: str, note: str = "", 
         return False
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / name
-        if target.exists():
-            target = target_dir / f"{Path(name).stem}-{int(time.time())}{Path(name).suffix}"
+        target = _unique_target(target_dir, name)
         shutil.move(str(source), str(target))
         record["filename"] = target.name
     except Exception as exc:
@@ -304,9 +318,7 @@ def send_to_review(category: str, filename: str, *, rule: str, note: str = "") -
     record = _archive_record(category, name, "risk", note, rule)
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / name
-        if target.exists():
-            target = target_dir / f"{Path(name).stem}-{int(time.time())}{Path(name).suffix}"
+        target = _unique_target(target_dir, name)
         shutil.move(str(source), str(target))
         record["filename"] = target.name
     except Exception as exc:
@@ -529,9 +541,7 @@ def restore_image(category: str, filename: str, *, target_category: str = "") ->
     record = _pop_manifest_record(category, name)
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        destination = target_dir / name
-        if destination.exists():
-            destination = target_dir / f"{Path(name).stem}-{int(time.time())}{Path(name).suffix}"
+        destination = _unique_target(target_dir, name)
         shutil.move(str(source), str(destination))
     except Exception as exc:
         logger.warning("[MemeArchive] restore failed: error_type=%s", type(exc).__name__)
@@ -637,9 +647,7 @@ def apply_category_plan() -> dict[str, int]:
                 continue
             # 退休分类的图不打包归档，统一并进通用分类，交给配额和打分决定去留
             see_dir.mkdir(parents=True, exist_ok=True)
-            target = see_dir / path.name
-            if target.exists():
-                target = see_dir / f"{Path(path.name).stem}-{int(time.time())}{Path(path.suffix)}"
+            target = _unique_target(see_dir, path.name)
             shutil.move(str(path), str(target))
             entry = entries.get((category, path.name))
             if entry is not None:
@@ -757,9 +765,7 @@ def _move_to_archive(category: str, filename: str, entry: dict | None, reason: s
         record["added_at"] = entry.get("added_at")
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / filename
-        if target.exists():
-            target = target_dir / f"{Path(filename).stem}-{int(time.time())}{Path(filename).suffix}"
+        target = _unique_target(target_dir, filename)
         shutil.move(str(source), str(target))
         record["filename"] = target.name
     except Exception as exc:
