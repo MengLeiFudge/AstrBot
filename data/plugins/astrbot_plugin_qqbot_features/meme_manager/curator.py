@@ -23,6 +23,7 @@ from .library_plan import (
     REVIEW_RULES,
     SCORE_VERSION,
     archive_image,
+    enforce_quotas,
     delete_image,
     image_phash,
     move_to_private_category,
@@ -181,6 +182,8 @@ class MemeCurator:
             return stats
         async with self._batch_lock:
             _backfill_phashes(PHASH_BACKFILL_LIMIT)
+            swept = enforce_quotas()
+            stats["trimmed"] += sum(swept.values())
             targets = self._pick_targets()
             if not targets:
                 return stats
@@ -189,7 +192,6 @@ class MemeCurator:
                 logger.warning("[MemeCurator] no image provider configured, scoring skipped")
                 return stats
             categories = _reviewable_categories()
-            touched: set[str] = set()
             for entry in targets:
                 if self._closed:
                     break
@@ -206,10 +208,6 @@ class MemeCurator:
                     )
                     continue
                 stats[outcome] += 1
-                if category:
-                    touched.add(category)
-            for category in sorted(touched):
-                stats["trimmed"] += trim_category(category)
             logger.info(
                 "[MemeCurator] scoring batch done: reason=%s scored=%s archived=%s trimmed=%s",
                 reason, stats["scored"], stats["archived"], stats["trimmed"],

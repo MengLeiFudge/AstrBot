@@ -471,8 +471,8 @@ def trim_category(category: str) -> int:
     if excess <= 0:
         return 0
     scored = [entry for entry in members if isinstance(entry.get("score"), dict)]
-    if len(scored) < len(members):
-        # 还有没打分的图，等它们打完再决定，否则会把好图换掉
+    if len(members) - len(scored) >= excess:
+        # 没打分的图数量已经够超额数，等它们打完再裁，否则可能误删好图
         return 0
     scored.sort(key=rank_of)
     archived = 0
@@ -480,6 +480,26 @@ def trim_category(category: str) -> int:
         if archive_image(category, str(entry.get("filename") or ""), reason="over_quota"):
             archived += 1
     return archived
+
+
+def enforce_quotas() -> dict[str, int]:
+    """Trim every category above its quota; pure rule, no model involved."""
+    index = load_meme_index()
+    counts: dict[str, int] = {}
+    for entry in index.get("images", []):
+        if isinstance(entry, dict):
+            category = str(entry.get("category") or "")
+            counts[category] = counts.get(category, 0) + 1
+    trimmed: dict[str, int] = {}
+    for category, count in sorted(counts.items()):
+        if count <= quota_of(category):
+            continue
+        moved = trim_category(category)
+        if moved:
+            trimmed[category] = moved
+    if trimmed:
+        logger.info("[MemeArchive] quota sweep: %s", trimmed)
+    return trimmed
 
 
 def apply_category_plan() -> dict[str, int]:
