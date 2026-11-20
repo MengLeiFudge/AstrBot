@@ -41,6 +41,30 @@
     "default": 240,
     "hint": "生图通常超过 1 分钟；超过该时间仍未返回时，插件回复失败并退回本次扣除的积分。"
   },
+  "draw_image_size_square": {
+    "description": "普通生图尺寸",
+    "type": "string",
+    "default": "4096x4096",
+    "hint": "格式为宽x高，写成非法值时回退默认；实测 4096x4096 单张约 2 分钟。"
+  },
+  "draw_image_size_landscape": {
+    "description": "横图尺寸",
+    "type": "string",
+    "default": "4096x2304",
+    "hint": "提示词出现横图、横幅、横版、横构图时改用该尺寸。"
+  },
+  "draw_image_size_portrait": {
+    "description": "竖图尺寸",
+    "type": "string",
+    "default": "2304x4096",
+    "hint": "提示词出现竖图、竖幅、竖版、竖构图时改用该尺寸。"
+  },
+  "draw_image_size_batch": {
+    "description": "豆豆眼四连发生图尺寸",
+    "type": "string",
+    "default": "1024x1024",
+    "hint": "四张并行时用较小尺寸避免顶到生图总超时；与普通生图尺寸分开配置。"
+  },
   "jmcomic_enabled": {
     "description": "启用 JM 下载转 PDF",
     "type": "bool",

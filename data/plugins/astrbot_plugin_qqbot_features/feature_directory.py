@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 
 from .menu_catalog import MENU_SECTIONS, MenuSection
-from .rightcodes_draw_catalog import RIGHTCODES_DRAW_COMMAND_FACTS
+from .draw_catalog import DRAW_COMMAND_FACTS
 
 
 FEATURE_INDEX_TITLE = "【当前 bot 的功能目录】"
@@ -49,7 +49,7 @@ COMMAND_FEATURE_ENTRIES: tuple[FeatureEntry, ...] = (
         name="生图",
         hint="文生图 / 图生图 / 头像生图 / 生动图；也可以直接说“画只猫”",
         aliases=("文生图", "图生图", "头像生图", "生动图", "画图", "画个", "画只", "来一张", "生成图片"),
-        commands=RIGHTCODES_DRAW_COMMAND_FACTS,
+        commands=DRAW_COMMAND_FACTS,
         notes=(
             "群里不 @ 机器人的自然语言画图不触发；私聊或 @ 机器人时可以直接说“画只猫”。",
             "不再支持“生成”“棉花糖生图”“棉花生图”前缀。",

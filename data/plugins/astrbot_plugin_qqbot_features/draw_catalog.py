@@ -3,20 +3,21 @@ from __future__ import annotations
 import re
 
 
-RIGHTCODES_DRAW_COMMAND_FACTS: tuple[str, ...] = (
+DRAW_COMMAND_FACTS: tuple[str, ...] = (
     "标准生图指令：文生图 提示词；图生图 提示词（同条附图或引用图片）；头像生图 [@某人] 提示词。",
     "动图版：把“生图”换成“生动图”，即文生动图 / 图生动图 / 头像生动图。",
     "无头像目标时使用发送者头像；真实艾特须紧跟头像生图。",
     "查询模型与价格：生图模型 / 生图价格；查询积分：查看积分；排行榜：积分排行。",
     "切换自己保存的生图模型：切换生图模型 <模型名>，只接受 CPA 当前注册的模型名；菜单不展示这条指令。",
+    "出图尺寸：默认 4K 方图；提示词写“竖图”或“横图”时改出 4K 竖幅或横幅。",
 )
 
 
-RIGHTCODES_DRAW_CATALOG_TEXT = """生图接口知识库：
+DRAW_CATALOG_TEXT = """生图接口知识库：
 
 当前 bot 生图功能：
 - 生图模型按 CPA 当前注册的图片模型自动选择，原模型不可用时自动改用其他可用模型；普通生图每次一张，价格人民币 0.06 元（60 积分），带 flare / sunburst 的变体模型 0.15 元（150 积分），豆豆眼四张组也只扣一次。
-""" + "\n".join(f"- {line}" for line in RIGHTCODES_DRAW_COMMAND_FACTS) + """
+""" + "\n".join(f"- {line}" for line in DRAW_COMMAND_FACTS) + """
 - 动图版在请求里带 output_format: gif；动图保留原始 GIF 字节并按动图发送，上游可能回退成静态 PNG，回退时成品消息会注明。实测动图为 9 帧、每帧 200ms、约 2048 像素，尺寸和帧数由上游决定。豆豆眼预设是静态四张，不支持动图。
 - 不再支持“生成”“棉花糖生图”“棉花生图”前缀。群里不 @ 的“生成一只白猫”不会触发生图；私聊或 @机器人 时说“生成一只白猫”“画个动图”由 AI 判定后调用同一条生图链路。
 - 旧用户保存的模型若已不在 CPA 注册列表里，会自动改用当前可用的生图模型，积分余额不变。
@@ -36,25 +37,23 @@ RIGHTCODES_DRAW_CATALOG_TEXT = """生图接口知识库：
   "model": "gpt-image-2.6",
   "prompt": "一只白猫",
   "n": 1,
-  "size": "1024x1024",
+  "size": "4096x4096",
   "response_format": "b64_json",
   "output_format": "png"
 }
 - 参考图：POST /images/edits，multipart/form-data 单张使用 image 文件字段，多张使用 image[] 文件字段，其余文本参数与文生图相同。
-- 同一次 CPA 请求等待最终图片。RC 官方绘图接口另使用 /draw/v1/images/generations、JSON image 数组、async=true 和任务轮询；不能将该协议与当前 CPA Images 接口混用。
-- 从返回 data[].b64_json 或 data[].url 取得图片；上游会忽略 size，实际尺寸由模型决定（实测 2048 左右）。请求体把 output_format 设为 gif 即可要动图，返回可能是 GIF 也可能是静态 PNG。
+- 同一次 CPA 请求等待最终图片，不使用任务轮询。
+- 从返回 data[].b64_json 或 data[].url 取得图片；size 决定成品尺寸，实测 4096x4096、4096x2304、2304x4096 都按原尺寸返回，auto 会得到 1024x1536 竖图。请求体把 output_format 设为 gif 即可要动图，返回可能是 GIF 也可能是静态 PNG。
 
 回答风格要求：
 - 模型、价格和用法问题只回答当前 bot 的功能；说明价格时使用人民币“元”。
 - 接口 body 问题直接给可复制 JSON，保留缩进，不使用 Markdown 代码围栏。"""
 
 
-_RIGHTCODES_DRAW_CATALOG_KEYWORDS = (
-    "rightcodes",
-    "right code",
-    "right.codes",
-    "docs.right.codes",
-    "gpt-image",
+_DRAW_CATALOG_KEYWORDS = (
+    "生图尺寸",
+    "竖图",
+    "横图",
     "nano-banana",
     "nano banana",
     "画图接口",
@@ -69,14 +68,16 @@ _RIGHTCODES_DRAW_CATALOG_KEYWORDS = (
     "1024x1024",
     "2048x2048",
     "4096x4096",
+    "4096x2304",
+    "2304x4096",
 )
 
 
-def should_inject_rightcodes_draw_catalog(query: str) -> bool:
+def should_inject_draw_catalog(query: str) -> bool:
     normalized = normalize_catalog_query(query)
     if not normalized:
         return False
-    if any(keyword in normalized for keyword in _RIGHTCODES_DRAW_CATALOG_KEYWORDS):
+    if any(keyword in normalized for keyword in _DRAW_CATALOG_KEYWORDS):
         return True
     if "size" in normalized and any(term in normalized for term in ("body", "json", "prompt", "model")):
         return True
@@ -91,5 +92,5 @@ def normalize_catalog_query(query: str) -> str:
     return re.sub(r"\s+", " ", str(query or "").strip().lower())
 
 
-def format_rightcodes_draw_catalog_injection(query: str) -> str:
-    return f"{RIGHTCODES_DRAW_CATALOG_TEXT}\n\n用户当前问题：{str(query or '').strip()}"
+def format_draw_catalog_injection(query: str) -> str:
+    return f"{DRAW_CATALOG_TEXT}\n\n用户当前问题：{str(query or '').strip()}"

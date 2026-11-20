@@ -35,7 +35,7 @@
 
 - 每次 LLM 请求前常驻注入一份功能目录索引（约 500 字）：功能名 + 触发词/指令，模型因此始终知道 bot 有哪些能力。
 - 当前消息命中功能别名时，追加该功能的指令原文与限制（最多 3 条、1800 字）；没命中只留索引，不追加详情。
-- 数据源只有两处，不手写第二份：分类与别名来自 `menu_catalog.py` 的 `MENU_SECTIONS`，生图指令原文来自 `rightcodes_draw_catalog.py` 的 `RIGHTCODES_DRAW_COMMAND_FACTS`。新增功能时改这两处，索引与详情自动跟上。
+- 数据源只有两处，不手写第二份：分类与别名来自 `menu_catalog.py` 的 `MENU_SECTIONS`，生图指令原文来自 `draw_catalog.py` 的 `DRAW_COMMAND_FACTS`。新增功能时改这两处，索引与详情自动跟上。
 - 匹配是去空白后的子串命中，按别名长度和优先级排序；被更长别名覆盖的短别名（`生图` 之于 `生图模型`）会被丢弃，避免同一问题返回两份重复说明。
 - 生图接口知识库仍按关键词单独注入，负责接口细节和“不得声称已开始绘图”这类行为约束；功能目录只负责“有哪些功能、确切怎么发”。
 - 目录列出的都是已启用的能力，模型被问“能不能做、怎么用”时照实说明，不以“没有这个功能”拒接；分类名重复时以命令级条目为准，不再派生同名分类条目。
@@ -81,13 +81,14 @@
   - 提示词包含“仿照上面、这张图、参考、聊天记录”等上下文指代，或引用了图片时，会先用当前会话 AstrBot provider 整理成准确生图提示词，再扣积分调用生图。
   - 如果只有 `[图片]` 这类占位、没有可用引用图片 URL/路径或引用文本，插件会直接提示补充引用或写完整提示词，不扣积分。
   - 插件配置 `base_url` 默认是本机 CPA `http://127.0.0.1:8317/v1`，`api_key` 填 CPA 客户端凭据；渠道选择与优先级由 CPA 管理。插件按模型名识别图片模型（含 image、imagen、dall-e、flux、banana 等关键字），版本从新到旧、基础名优先于变体；请求返回“模型未注册为图片模型”时丢弃缓存重新读取并逐个改用其他可用模型。HC/RC 渠道中这些模型记录必须设置 `image: true`，否则 CPA 会在本机直接返回 HTTP 400。
-  - 文生图走 `/images/generations`；参考图走 `/images/edits` multipart 上传，单张最多 20 MiB，GIF 等格式取首帧转换为 PNG。默认请求一张 `1024x1024` 图片。
+  - 文生图走 `/images/generations`；参考图走 `/images/edits` multipart 上传，单张最多 20 MiB，GIF 等格式取首帧转换为 PNG。
+  - 出图尺寸由请求的 `size` 决定，渠道按原尺寸返回，不再自行指定。默认 `4096x4096` 方图；提示词含“竖图 / 竖幅 / 竖版 / 竖构图”时用 `2304x4096`，含“横图 / 横幅 / 横版 / 横构图”时用 `4096x2304`；豆豆眼四张并行固定用 `1024x1024`。四个尺寸分别由配置 `draw_image_size_square` / `draw_image_size_portrait` / `draw_image_size_landscape` / `draw_image_size_batch` 控制，写成非 `宽x高` 时回退默认值。实测 4K 单张 43–115 秒，`auto` 会返回 1024x1536 竖图，因此不作为默认。
   - 生图成功、失败或超时失败都会引用原始生图请求；生成默认 240 秒总超时，全部生成失败后退回本次扣除的积分。原图准备最多 30 秒，结果发送最多 60 秒；URL 和 Base64 返回均校验为有效图片；PNG保留原字节，其他格式转PNG并保留实际尺寸，再统一保存与交付，结果及转换后均限制32 MiB。
   - 不再支持 `生成`、`棉花糖生图`、`棉花生图` 前缀：群里不 @ 的“生成一只白猫”不会触发，请用显式指令，或在私聊 / @机器人 时说“生成一只白猫”，由 AI 判定后调用同一条生图链路。显式指令后只有空白时固定回复补充提示词，不扣积分。
 - 生图接口知识库
   - 用户询问模型、价格、画图接口、`body`、`size` 或 Images 路径时，会在 LLM 请求前注入当前功能说明。
   - 如果用户引用上一条问题后只说“回答一下”，被引用消息参与知识库判定和 LLM 上下文。
-  - 当前请求直接等待图片，不再使用旧 RightCodes 的 `async=true` 和任务轮询；只有接口问题才解释 CPA 接入细节。
+  - 当前请求直接等待图片，不使用 `async=true` 和任务轮询；只有接口问题才解释 CPA 接入细节。
 - `生图模型` / `生图价格`
   - 展示当前模型、CPA 当前可用的生图模型列表、各模型人民币价格及对应积分消耗；保存的模型已不可用时提示下次生图会自动改用可用模型。
 - 旧模型切换指令
@@ -307,12 +308,12 @@
 
 ## 数据与安全边界
 
-- 使用 `data\plugin_data\qqbot_features_runtime` 作为游戏、Arcaea、RightCodes 积分和本地 artifact 发布状态目录；游戏、Arcaea 会话/缓存、复读/thunder/Lolicon 群配置、Shapez 群文件清理状态和 RightCodes 积分优先写入 `db\qqbot_features.sqlite3`。
+- 使用 `data\plugin_data\qqbot_features_runtime` 作为游戏、Arcaea、生图积分和本地 artifact 发布状态目录；游戏、Arcaea 会话/缓存、复读/thunder/Lolicon 群配置、Shapez 群文件清理状态和生图积分优先写入 `db\qqbot_features.sqlite3`。
 - JM 下载图片、构建中间产物和每次发送的加密 PDF 副本只写入 AstrBot Core temp 下的 `qqbot_features\jmcomic\`，完成、失败或超时后清理。未加密标准 PDF 持久保存在 `qqbot_features_runtime\comic_pdf_cache\JM<作品ID>-【作者】标题\`；每目录只有 `metadata.json` 和一个或多个校验过的 PDF，默认受 10 GiB LRU 上限约束。
 - Lolicon 元数据写入 `db\lolicon.sqlite3`，图片不再下载到本地；菜单图、Arc 猜歌面板、shapez 渲染图和临时面板写入 AstrBot Core 的 `data\temp\qqbot_features\` 子目录，进入 Core `temp_dir_max_size` 容量清理范围。插件后台只删除超过安全窗口的重复图片副本，不做独立按日期清理；旧 AI 记忆、TTS、头像和 shapez 静态旧目录不再作为日常运行态保留。
 - 使用 `data\plugin_data\meme_manager` 作为本地表情包运行态目录；这是兼容保留的数据路径，不再对应独立 AstrBot 插件。归档只放低分图：超过配额、被新图顶掉、竞争失败的表情包按原分类移入 `data\plugin_data\meme_manager\archive\<分类>\`，同目录 `archive.json` 记录总分、四个分项、归档原因和时间，需要时可按分类和分数取回。风控不合格的图不进归档，另放 `review_queue\<分类>\`（`review.json` 记录规则），等人工定夺；重复图直接删文件，不留副本。
 - 人工审核走本地服务 `.codex/drafts/review_server.py`（`http://127.0.0.1:8799`，或双击 `D:\Desktop\start-meme-review.bat`）：只列风控待审图，低分归档（超配额、被新图顶掉）不进待审列表；点删除立即删文件、点私密立即迁入对应私密分类、点恢复立即从列表消失并放进后台队列，几秒内归位（原分类还在就归原分类，退休分类才让模型判一次）；人工点过恢复的图直接记一张及格分，不再复审也不再参与后台打分。
 - 旧公开群上下文快照不再作为 prompt 事实源，也不提供群聊记录导出命令。
 - 不提交运行态数据、QQ 登录态、token、数据库或日志。
-- RightCodes API Key 直接填写在本插件配置字段 `api_key`，不写入插件源码，也不再读取旧 `.env`。
+- CPA 客户端 API Key 直接填写在本插件配置字段 `api_key`，不写入插件源码，也不再读取旧 `.env`。
 - Sub2API Admin API Key 直接填写在本插件运行态配置字段 `sub2api_admin_api_key`，不写入插件源码、示例配置、群消息或日志。

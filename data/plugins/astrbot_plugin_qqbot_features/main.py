@@ -60,46 +60,46 @@ from .meme_manager.commands import looks_like_meme_manager_command
 from .meme_manager.commands import parse_meme_manager_command
 from .meme_manager.runtime import MemeManagerRuntime
 from .onebot_api import OneBotCallApiAdapter
-from .rightcodes_draw_logic import RightCodesDrawClient
-from .rightcodes_draw_logic import RightCodesDrawQuotaStore
-from .rightcodes_draw_logic import RightCodesDrawRequest
-from .rightcodes_draw_logic import RightCodesDrawResult
-from .rightcodes_draw_logic import extract_rightcodes_draw_model_switch
-from .rightcodes_draw_logic import extract_removed_rightcodes_draw_temporary_model
-from .rightcodes_draw_logic import fetch_rightcodes_draw_models
-from .rightcodes_draw_logic import format_draw_quota_exceeded_message
-from .rightcodes_draw_logic import format_draw_start_message
-from .rightcodes_draw_logic import format_rightcodes_draw_failure
-from .rightcodes_draw_logic import format_rightcodes_draw_missing_prompt_message
-from .rightcodes_draw_logic import format_rightcodes_draw_model_help
-from .rightcodes_draw_logic import format_rightcodes_draw_model_switch_invalid
-from .rightcodes_draw_logic import format_rightcodes_draw_model_switch_success
-from .rightcodes_draw_logic import format_rightcodes_draw_points_mutation_denied
-from .rightcodes_draw_logic import format_rightcodes_draw_points_ranking
-from .rightcodes_draw_logic import format_rightcodes_draw_points_status
-from .rightcodes_draw_logic import format_rightcodes_draw_success
-from .rightcodes_draw_logic import format_rightcodes_draw_temporary_model_removed
-from .rightcodes_draw_logic import format_rightcodes_draw_timeout
-from .rightcodes_draw_logic import load_rightcodes_config
-from .rightcodes_draw_logic import looks_like_rightcodes_draw_feature_request
-from .rightcodes_draw_logic import looks_like_rightcodes_draw_help_command
-from .rightcodes_draw_logic import looks_like_rightcodes_draw_invocation
-from .rightcodes_draw_logic import looks_like_rightcodes_draw_model_switch
-from .rightcodes_draw_logic import looks_like_rightcodes_draw_points_mutation_request
-from .rightcodes_draw_logic import looks_like_rightcodes_draw_points_query
-from .rightcodes_draw_logic import looks_like_rightcodes_draw_points_ranking
-from .rightcodes_draw_logic import parse_rightcodes_draw_command
-from .rightcodes_draw_logic import parse_rightcodes_draw_model_switch
-from .rightcodes_draw_catalog import format_rightcodes_draw_catalog_injection
-from .rightcodes_draw_catalog import should_inject_rightcodes_draw_catalog
-from .rightcodes_draw_rewrite import RIGHTCODES_DRAW_REWRITE_SYSTEM_PROMPT
-from .rightcodes_draw_rewrite import RightCodesDrawRewriteInput
-from .rightcodes_draw_rewrite import build_rightcodes_draw_rewrite_prompt
-from .rightcodes_draw_rewrite import format_rightcodes_draw_rewrite_failure
-from .rightcodes_draw_rewrite import format_rightcodes_draw_rewrite_missing_context
-from .rightcodes_draw_rewrite import merge_rewritten_draw_request
-from .rightcodes_draw_rewrite import parse_rightcodes_draw_rewrite_response
-from .rightcodes_draw_rewrite import should_rewrite_rightcodes_draw_prompt
+from .draw_service import DrawClient
+from .draw_service import DrawQuotaStore
+from .draw_service import DrawRequest
+from .draw_service import DrawResult
+from .draw_service import extract_draw_model_switch
+from .draw_service import extract_removed_draw_temporary_model
+from .draw_service import fetch_draw_models
+from .draw_service import format_draw_quota_exceeded_message
+from .draw_service import format_draw_start_message
+from .draw_service import format_draw_failure
+from .draw_service import format_draw_missing_prompt_message
+from .draw_service import format_draw_model_help
+from .draw_service import format_draw_model_switch_invalid
+from .draw_service import format_draw_model_switch_success
+from .draw_service import format_draw_points_mutation_denied
+from .draw_service import format_draw_points_ranking
+from .draw_service import format_draw_points_status
+from .draw_service import format_draw_success
+from .draw_service import format_draw_temporary_model_removed
+from .draw_service import format_draw_timeout
+from .draw_service import load_draw_config
+from .draw_service import looks_like_draw_feature_request
+from .draw_service import looks_like_draw_help_command
+from .draw_service import looks_like_draw_invocation
+from .draw_service import looks_like_draw_model_switch
+from .draw_service import looks_like_draw_points_mutation_request
+from .draw_service import looks_like_draw_points_query
+from .draw_service import looks_like_draw_points_ranking
+from .draw_service import parse_draw_command
+from .draw_service import parse_draw_model_switch
+from .draw_catalog import format_draw_catalog_injection
+from .draw_catalog import should_inject_draw_catalog
+from .draw_rewrite import DRAW_REWRITE_SYSTEM_PROMPT
+from .draw_rewrite import DrawRewriteInput
+from .draw_rewrite import build_draw_rewrite_prompt
+from .draw_rewrite import format_draw_rewrite_failure
+from .draw_rewrite import format_draw_rewrite_missing_context
+from .draw_rewrite import merge_rewritten_draw_request
+from .draw_rewrite import parse_draw_rewrite_response
+from .draw_rewrite import should_rewrite_draw_prompt
 from .reply_timing import deliver_segmented_result, restore_delivered_result
 from .request_context import build_current_request_context
 from .request_context import collect_source_image_sources
@@ -310,11 +310,12 @@ FEATURES: tuple[FeatureSpec, ...] = (
         lines=("i/view/chart/path：渲染 shapez 短代码图片；p/puzzle 在线谜题仍提示未配置 token",),
     ),
     FeatureSpec(
-        name="RightCodes生图",
-        aliases=("生图", "画图", "RightCodes"),
+        name="生图",
+        aliases=("画图",),
         lines=(
             "文生图 / 图生图 / 头像生图 [@某人] 提示词：60～150 积分/次（按模型）",
             "动图：文生动图 / 图生动图 / 头像生动图；上游回退静态图时会在成品消息注明",
+            "出图尺寸：默认 4K 方图；提示词写“竖图”或“横图”时改出 4K 竖幅或横幅",
             "生图模型 / 生图价格：查看当前模型、可用模型与价格",
             "查看积分 / balance / points：查询积分、当前模型和消耗；积分排行：查看全群前 10",
         ),
@@ -413,7 +414,7 @@ class QQBotFeaturesPlugin(Star):
         self._reread_state = RereadRepeatState()
         self._llm_error_notice_cooldown = LlmErrorNoticeCooldown()
         self._arc_apk_update_manager = None
-        self._rightcodes_config = load_rightcodes_config(config)
+        self._draw_config = load_draw_config(config)
         self._comic_pdf_config = load_comic_pdf_config(config)
         self._comic_pdf_service = ComicPdfService(
             get_plugin_temp_root("jmcomic"),
@@ -443,7 +444,7 @@ class QQBotFeaturesPlugin(Star):
         )
         self._temp_duplicate_cleanup_task: asyncio.Task | None = None
         self._sub2api_alerted_thresholds_by_account: dict[str, set[int]] = {}
-        self._rightcodes_draw_lock = asyncio.Semaphore(2)
+        self._draw_lock = asyncio.Semaphore(2)
         self._draw_intent_router = DrawIntentRouter()
         self._group_inviter_by_group_id: dict[str, str] = {}
         reply_style_guard_config = ScopedPluginConfig(
@@ -1597,8 +1598,8 @@ class QQBotFeaturesPlugin(Star):
     async def cache_group_nickname(self, event: AstrMessageEvent):
         await self._cache_group_nickname(event)
 
-    @filter.event_message_type(EventMessageType.GROUP_MESSAGE, desc="记录 RightCodes 生图积分的普通群消息事件。")
-    async def record_rightcodes_group_message_points(self, event: AstrMessageEvent):
+    @filter.event_message_type(EventMessageType.GROUP_MESSAGE, desc="记录生图积分的普通群消息事件。")
+    async def record_group_message_points(self, event: AstrMessageEvent):
         if not allow_passive_events(self._feature_mode):
             return
         if str(event.get_sender_id() or "") == str(event.get_self_id() or ""):
@@ -1607,23 +1608,23 @@ class QQBotFeaturesPlugin(Star):
             return
         if not str(event.get_message_str() or "").strip():
             return
-        store = RightCodesDrawQuotaStore(
-            self._rightcodes_config.data_root,
-            multiplier=self._rightcodes_config.point_multiplier,
+        store = DrawQuotaStore(
+            self._draw_config.data_root,
+            multiplier=self._draw_config.point_multiplier,
         )
         await asyncio.to_thread(store.record_group_message, event.get_sender_id())
 
-    @filter.on_llm_request(desc="在 LLM 请求前按关键词注入 RightCodes 生图接口知识库。")
-    async def inject_rightcodes_draw_catalog(self, event: AstrMessageEvent, req: ProviderRequest):
+    @filter.on_llm_request(desc="在 LLM 请求前按关键词注入生图接口知识库。")
+    async def inject_draw_catalog(self, event: AstrMessageEvent, req: ProviderRequest):
         request_context = build_current_request_context(event, req.prompt or "")
         query = request_context.combined_query or request_context.current_text
-        if not should_inject_rightcodes_draw_catalog(query):
+        if not should_inject_draw_catalog(query):
             return
         req.extra_user_content_parts.append(
-            TextPart(text=format_rightcodes_draw_catalog_injection(query)).mark_as_temp()
+            TextPart(text=format_draw_catalog_injection(query)).mark_as_temp()
         )
         logger.info(
-            "[QQBotFeatures] injected RightCodes draw catalog: session=%s",
+            "[QQBotFeatures] injected draw catalog: session=%s",
             getattr(event, "unified_msg_origin", ""),
         )
 
@@ -1676,12 +1677,12 @@ class QQBotFeaturesPlugin(Star):
         """
         event.set_extra("qqbot_draw_intent_wake", _is_direct_or_private(event))
 
-    @filter.event_message_type(EventMessageType.ALL, desc="RightCodes 生图总入口，处理明确指令和自然语言生图。")
-    async def rightcodes_draw_command(self, event: AstrMessageEvent):
+    @filter.event_message_type(EventMessageType.ALL, desc="生图总入口，处理明确指令和自然语言生图。")
+    async def draw_command(self, event: AstrMessageEvent):
         text = extract_plain_text(event).strip()
         if not text:
             return
-        if not _should_handle_migrated_command(event, self._feature_mode, command_type="rightcodes_draw"):
+        if not _should_handle_migrated_command(event, self._feature_mode, command_type="draw"):
             return
         natural_intent = None
         intent_parts = None
@@ -1693,7 +1694,7 @@ class QQBotFeaturesPlugin(Star):
                 raise ValueError("当前平台无法读取QQ引用图片")
             return await bot.call_action(action, **params)
 
-        if not looks_like_rightcodes_draw_feature_request(text):
+        if not looks_like_draw_feature_request(text):
             if not event.get_extra("qqbot_draw_intent_wake", False):
                 return
             parts = _raw_event_dict(event).get("message")
@@ -1729,72 +1730,72 @@ class QQBotFeaturesPlugin(Star):
             intent_parts = natural_intent.command_parts()
             text = component_text(intent_parts)
         await self._cache_group_nickname(event)
-        store = RightCodesDrawQuotaStore(
-            self._rightcodes_config.data_root,
-            multiplier=self._rightcodes_config.point_multiplier,
+        store = DrawQuotaStore(
+            self._draw_config.data_root,
+            multiplier=self._draw_config.point_multiplier,
         )
         user_id = str(event.get_sender_id() or "")
 
         explicit = STANDARD_DRAW_PREFIX.match(text) is not None
-        if not explicit and looks_like_rightcodes_draw_points_mutation_request(text):
-            yield event.plain_result(format_rightcodes_draw_points_mutation_denied())
+        if not explicit and looks_like_draw_points_mutation_request(text):
+            yield event.plain_result(format_draw_points_mutation_denied())
             event.stop_event()
             return
-        if looks_like_rightcodes_draw_points_query(text):
+        if looks_like_draw_points_query(text):
             balance = await asyncio.to_thread(store.get_balance, user_id)
-            yield event.plain_result(format_rightcodes_draw_points_status(balance))
+            yield event.plain_result(format_draw_points_status(balance))
             event.stop_event()
             return
-        if looks_like_rightcodes_draw_points_ranking(text):
+        if looks_like_draw_points_ranking(text):
             ranking = await asyncio.to_thread(store.get_points_ranking, limit=10)
             group_id = event.get_group_id()
             yield event.plain_result(
-                format_rightcodes_draw_points_ranking(
+                format_draw_points_ranking(
                     ranking,
                     resolve_display_name=lambda candidate: resolve_display_name(group_id, candidate),
                 )
             )
             event.stop_event()
             return
-        if looks_like_rightcodes_draw_help_command(text):
+        if looks_like_draw_help_command(text):
             balance = await asyncio.to_thread(store.get_balance, user_id)
-            available_models = await self._rightcodes_draw_models(balance.model)
+            available_models = await self._draw_models(balance.model)
             yield event.plain_result(
-                format_rightcodes_draw_model_help(
+                format_draw_model_help(
                     balance.model, multiplier=balance.multiplier, available_models=available_models,
                 )
             )
             event.stop_event()
             return
-        if looks_like_rightcodes_draw_model_switch(text):
+        if looks_like_draw_model_switch(text):
             balance = await asyncio.to_thread(store.get_balance, user_id)
-            candidate = extract_rightcodes_draw_model_switch(text) or ""
-            model = parse_rightcodes_draw_model_switch(text)
-            available_models = await self._rightcodes_draw_models(model or balance.model)
+            candidate = extract_draw_model_switch(text) or ""
+            model = parse_draw_model_switch(text)
+            available_models = await self._draw_models(model or balance.model)
             if model is None or (available_models and model not in available_models):
                 yield event.plain_result(
-                    format_rightcodes_draw_model_switch_invalid(candidate, available_models=available_models)
+                    format_draw_model_switch_invalid(candidate, available_models=available_models)
                 )
             else:
                 balance = await asyncio.to_thread(store.set_model, user_id, model)
-                yield event.plain_result(format_rightcodes_draw_model_switch_success(balance))
+                yield event.plain_result(format_draw_model_switch_success(balance))
             event.stop_event()
             return
 
-        temporary_model = extract_removed_rightcodes_draw_temporary_model(text)
+        temporary_model = extract_removed_draw_temporary_model(text)
         if temporary_model is not None:
-            yield event.plain_result(format_rightcodes_draw_temporary_model_removed(temporary_model))
+            yield event.plain_result(format_draw_temporary_model_removed(temporary_model))
             event.stop_event()
             return
-        draw_request = parse_rightcodes_draw_command(text)
+        draw_request = parse_draw_command(text)
         if draw_request is None:
-            if looks_like_rightcodes_draw_invocation(text):
-                yield event.plain_result(format_rightcodes_draw_missing_prompt_message())
+            if looks_like_draw_invocation(text):
+                yield event.plain_result(format_draw_missing_prompt_message())
                 event.stop_event()
                 return
             return
         balance = await asyncio.to_thread(store.get_balance, user_id)
-        draw_request = RightCodesDrawRequest(
+        draw_request = DrawRequest(
             prompt=draw_request.prompt,
             model=balance.model,
             image_urls=draw_request.image_urls,
@@ -1812,12 +1813,12 @@ class QQBotFeaturesPlugin(Star):
             else:
                 request_context = build_current_request_context(event, text)
                 reference_image_urls = extract_image_sources(event)
-                if should_rewrite_rightcodes_draw_prompt(
+                if should_rewrite_draw_prompt(
                     draw_request,
                     reply_texts=request_context.reply_texts,
                     image_urls=reference_image_urls,
                 ):
-                    rewritten_request = await self._rewrite_rightcodes_draw_request(
+                    rewritten_request = await self._rewrite_draw_request(
                         event,
                         draw_request,
                         current_text=request_context.current_text,
@@ -1827,9 +1828,9 @@ class QQBotFeaturesPlugin(Star):
                     )
                     if rewritten_request is None:
                         if request_context.unresolved_media_context and not reference_image_urls:
-                            yield event.plain_result(format_rightcodes_draw_rewrite_missing_context())
+                            yield event.plain_result(format_draw_rewrite_missing_context())
                         else:
-                            yield event.plain_result(format_rightcodes_draw_rewrite_failure())
+                            yield event.plain_result(format_draw_rewrite_failure())
                         event.stop_event()
                         return
                     draw_request = rewritten_request
@@ -1841,7 +1842,7 @@ class QQBotFeaturesPlugin(Star):
             yield event.plain_result(f"{detail}。本次没有扣积分。")
             event.stop_event()
             return
-        draw_model = await self._resolve_rightcodes_draw_model(balance.model)
+        draw_model = await self._resolve_draw_model(balance.model)
         if draw_model != balance.model:
             balance = await asyncio.to_thread(store.set_model, user_id, draw_model)
             draw_request = replace(draw_request, model=draw_model)
@@ -1852,7 +1853,7 @@ class QQBotFeaturesPlugin(Star):
             event.stop_event()
             return
 
-        timeout_seconds = self._rightcodes_config.draw_timeout_seconds
+        timeout_seconds = self._draw_config.draw_timeout_seconds
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         refunded = False
         generated = False
@@ -1881,7 +1882,7 @@ class QQBotFeaturesPlugin(Star):
                 elif natural_intent is not None:
                     start_message += natural_intent.start_detail()
                 await event.send(event.plain_result(start_message))
-            api_key = self._rightcodes_config.api_key
+            api_key = self._draw_config.api_key
             if not api_key:
                 await refund_once()
                 yield event.plain_result("CPA 生图 API Key 还没配置。")
@@ -1890,17 +1891,18 @@ class QQBotFeaturesPlugin(Star):
 
             try:
                 async with asyncio.timeout_at(deadline):
-                    await self._rightcodes_draw_lock.acquire()
+                    await self._draw_lock.acquire()
                 try:
                     remaining = deadline - asyncio.get_running_loop().time()
-                    outcomes = await RightCodesDrawClient(
+                    outcomes = await DrawClient(
                         api_key=api_key,
-                        base_url=self._rightcodes_config.base_url,
+                        base_url=self._draw_config.base_url,
                         timeout_seconds=max(0.0, remaining),
+                        image_sizes=self._draw_config.image_sizes,
                     ).draw_batch(draw_requests)
                 finally:
-                    self._rightcodes_draw_lock.release()
-                results = tuple(item for item in outcomes if isinstance(item, RightCodesDrawResult))
+                    self._draw_lock.release()
+                results = tuple(item for item in outcomes if isinstance(item, DrawResult))
                 if not results:
                     raise next(item for item in outcomes if isinstance(item, BaseException))
                 generated = True
@@ -1911,13 +1913,13 @@ class QQBotFeaturesPlugin(Star):
                 await refund_once()
                 yield _chain_result_with_reply(
                     event,
-                    [Plain(format_rightcodes_draw_timeout(timeout_seconds))],
+                    [Plain(format_draw_timeout(timeout_seconds))],
                 )
                 event.stop_event()
                 return
             except Exception as exc:
                 await refund_once()
-                yield _chain_result_with_reply(event, [Plain(format_rightcodes_draw_failure(exc))])
+                yield _chain_result_with_reply(event, [Plain(format_draw_failure(exc))])
                 event.stop_event()
                 return
         except asyncio.CancelledError:
@@ -1936,28 +1938,28 @@ class QQBotFeaturesPlugin(Star):
         finally:
             event.stop_event()
 
-    async def _rightcodes_draw_models(self, preferred: str) -> tuple[str, ...]:
+    async def _draw_models(self, preferred: str) -> tuple[str, ...]:
         """List CPA image models, keeping the preferred one first when it is registered."""
-        config = self._rightcodes_config
+        config = self._draw_config
         if not config.api_key:
             return ()
         try:
-            return await fetch_rightcodes_draw_models(
+            return await fetch_draw_models(
                 api_key=config.api_key, base_url=config.base_url, preferred=preferred,
             )
         except Exception as exc:
             logger.warning("[QQBotFeatures] draw model discovery failed: error_type=%s", type(exc).__name__)
             return ()
 
-    async def _resolve_rightcodes_draw_model(self, stored_model: str) -> str:
+    async def _resolve_draw_model(self, stored_model: str) -> str:
         """Switch to a model CPA still registers when the saved one is gone."""
-        models = await self._rightcodes_draw_models(stored_model)
+        models = await self._draw_models(stored_model)
         return models[0] if models else stored_model
 
     async def _deliver_draw_result(
         self,
         event: AstrMessageEvent,
-        results: tuple[RightCodesDrawResult, ...],
+        results: tuple[DrawResult, ...],
         model: str,
         refund: Callable[[], Awaitable[None]],
         *,
@@ -1980,7 +1982,7 @@ class QQBotFeaturesPlugin(Star):
             saved = None
             try:
                 saved = await asyncio.to_thread(
-                    save_generated_image, result.image_bytes, self._rightcodes_config.data_root,
+                    save_generated_image, result.image_bytes, self._draw_config.data_root,
                     image_format=result.image_format,
                 )
             except Exception as exc:
@@ -1992,7 +1994,7 @@ class QQBotFeaturesPlugin(Star):
                 image = Image.fromBytes(result.image_bytes)
                 image.__dict__["summary"] = choose_image_summary()
                 images.append(image)
-        message = format_rightcodes_draw_success(
+        message = format_draw_success(
             max(results, key=lambda item: item.total_seconds), model=model, image_count=len(results),
         )
         if len(results) < expected_count:
@@ -2023,16 +2025,16 @@ class QQBotFeaturesPlugin(Star):
         except Exception as exc:
             logger.warning("[QQBotFeatures] draw failure notice failed: error_type=%s", type(exc).__name__)
 
-    async def _rewrite_rightcodes_draw_request(
+    async def _rewrite_draw_request(
         self,
         event: AstrMessageEvent,
-        draw_request: RightCodesDrawRequest,
+        draw_request: DrawRequest,
         *,
         current_text: str,
         reply_texts: tuple[str, ...],
         reference_image_urls: tuple[str, ...],
         unresolved_media_context: bool,
-    ) -> RightCodesDrawRequest | None:
+    ) -> DrawRequest | None:
         if unresolved_media_context and not reference_image_urls:
             logger.info(
                 "[QQBotFeatures] skip draw prompt rewrite because media context is unresolved: session=%s",
@@ -2047,8 +2049,8 @@ class QQBotFeaturesPlugin(Star):
         if provider is None:
             logger.info("[QQBotFeatures] no provider for draw prompt rewrite")
             return None
-        rewrite_prompt = build_rightcodes_draw_rewrite_prompt(
-            RightCodesDrawRewriteInput(
+        rewrite_prompt = build_draw_rewrite_prompt(
+            DrawRewriteInput(
                 prompt=draw_request.prompt,
                 model=draw_request.model,
                 current_text=current_text,
@@ -2060,16 +2062,16 @@ class QQBotFeaturesPlugin(Star):
         try:
             response = await provider.text_chat(
                 prompt=rewrite_prompt,
-                session_id=f"rightcodes_draw_rewrite:{event.unified_msg_origin}",
+                session_id=f"draw_rewrite:{event.unified_msg_origin}",
                 image_urls=list(reference_image_urls),
                 contexts=[],
-                system_prompt=RIGHTCODES_DRAW_REWRITE_SYSTEM_PROMPT,
+                system_prompt=DRAW_REWRITE_SYSTEM_PROMPT,
                 persist=False,
             )
         except Exception as exc:
             logger.warning("[QQBotFeatures] draw prompt rewrite provider failed: %s", exc)
             return None
-        rewrite_result = parse_rightcodes_draw_rewrite_response(
+        rewrite_result = parse_draw_rewrite_response(
             getattr(response, "completion_text", ""),
             fallback_image_urls=reference_image_urls,
         )
@@ -2080,7 +2082,7 @@ class QQBotFeaturesPlugin(Star):
             )
             return None
         logger.info(
-            "[QQBotFeatures] draw prompt rewritten before RightCodes call: session=%s images=%s prompt_chars=%s",
+            "[QQBotFeatures] draw prompt rewritten before CPA call: session=%s images=%s prompt_chars=%s",
             getattr(event, "unified_msg_origin", ""),
             len(rewrite_result.image_urls),
             len(rewrite_result.prompt),
@@ -2483,9 +2485,9 @@ def looks_like_qqbot_fixed_command(text: str) -> bool:
     normalized = str(text or "").strip()
     if not normalized:
         return False
-    if parse_rightcodes_draw_command(normalized) is not None:
+    if parse_draw_command(normalized) is not None:
         return True
-    if looks_like_rightcodes_draw_feature_request(normalized):
+    if looks_like_draw_feature_request(normalized):
         return True
     if looks_like_sub2api_usage_command(normalized):
         return True

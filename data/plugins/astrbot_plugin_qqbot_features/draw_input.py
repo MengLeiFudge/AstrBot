@@ -11,7 +11,7 @@ import re
 
 import httpx
 
-from .rightcodes_draw_logic import RIGHTCODES_DRAW_DOUDOUYAN_COMMAND, RightCodesDrawRequest, load_draw_reference_image
+from .draw_service import DRAW_DOUDOUYAN_COMMAND, DrawRequest, load_draw_reference_image
 
 
 STANDARD_DRAW_PREFIX = re.compile(r"^\s*(文生动图|图生动图|头像生动图|文生图|图生图|头像生图)")
@@ -49,7 +49,7 @@ async def doudouyan_command_parts(segments: Sequence[Mapping], *, call_action: O
         An explicit single-image command, or None for an ordinary drawing request.
     """
     text = explicit_command_text(segments).strip()
-    if text == RIGHTCODES_DRAW_DOUDOUYAN_COMMAND:
+    if text == DRAW_DOUDOUYAN_COMMAND:
         return [{"type": "text", "data": {"text": "头像生图 豆豆眼"}}]
     if "豆豆眼" not in text:
         return None
@@ -93,7 +93,7 @@ async def prepare_explicit_draw_request(
     sender_id: str,
     model: str,
     call_action: OneBotCall,
-) -> RightCodesDrawRequest:
+) -> DrawRequest:
     """Resolve exactly one reference for image commands, or none for text commands.
 
     Args:
@@ -136,7 +136,7 @@ async def prepare_explicit_draw_request(
     if not prompt:
         raise ValueError("请在生图指令后填写提示词")
     if base_mode == "文生图":
-        return RightCodesDrawRequest(prompt=prompt, model=model, gif=animated)
+        return DrawRequest(prompt=prompt, model=model, gif=animated)
     if "豆豆眼" in prompt and animated:
         raise ValueError("豆豆眼预设是静态四张，不支持动图；请用“图生图 豆豆眼”或“文生动图 提示词”")
 
@@ -197,11 +197,11 @@ async def prepare_explicit_draw_request(
                 if not re.match(r"^(?:https?://|file://|/|[A-Za-z]:[\\/])", source):
                     raise ValueError("图片地址已失效，请重新发送")
         return await preload_draw_references(
-            RightCodesDrawRequest(prompt=prompt, model=model, image_urls=(source,), gif=animated)
+            DrawRequest(prompt=prompt, model=model, image_urls=(source,), gif=animated)
         )
 
 
-def prepare_doudouyan_requests(request: RightCodesDrawRequest) -> tuple[RightCodesDrawRequest, ...]:
+def prepare_doudouyan_requests(request: DrawRequest) -> tuple[DrawRequest, ...]:
     """Expand a prepared preset request before reserving points.
 
     Args:
@@ -224,7 +224,7 @@ def prepare_doudouyan_requests(request: RightCodesDrawRequest) -> tuple[RightCod
     return tuple(replace(request, prompt=text) for text in (request.prompt, request.prompt, prompt, prompt))
 
 
-async def preload_draw_references(request: RightCodesDrawRequest) -> RightCodesDrawRequest:
+async def preload_draw_references(request: DrawRequest) -> DrawRequest:
     """Download and validate selected references before reserving any points.
 
     Args:
