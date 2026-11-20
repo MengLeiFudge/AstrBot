@@ -25,7 +25,19 @@ TIE_MARGIN = 5.0
 MIN_ENTRY_TOTAL = 55
 CAPTION_SIMILARITY = 0.7
 PHASH_MAX_DISTANCE = 6
-PRIVATE_CATEGORY = "private_suggestive"
+# 私密分类：只能在跟主人聊天时发，云栖不往群里自动发；和普通分类一样受配额约束
+PRIVATE_RULE_CATEGORY: dict[str, str] = {
+    "sexual_suggestive": "private_flirt",
+    "undress_meme": "private_intimate",
+    "sexual_explicit": "private_explicit",
+}
+PRIVATE_CATEGORIES = tuple(dict.fromkeys(PRIVATE_RULE_CATEGORY.values()))
+PRIVATE_CATEGORY = PRIVATE_CATEGORIES[0]
+PRIVATE_LABELS: dict[str, tuple[str, str]] = {
+    "private_flirt": ("暧昧调情", "调情、眼神、贴身但没露的图，适合发给对象；只能在跟主人聊天时发。"),
+    "private_intimate": ("亲密接触", "睡衣、躺床、贴很近、脱衣梗这类亲密图；只能在跟主人聊天时发。"),
+    "private_explicit": ("露点裸露", "明确露点或裸露；只能在跟主人聊天时发。"),
+}
 
 # 归档/归零分的具体原因，模型必须给出一条，人工审核页面按此分类
 ARCHIVE_RULES: dict[str, str] = {
@@ -76,8 +88,10 @@ CATEGORY_QUOTAS: dict[str, int] = {
     "polite_awkward_smile": 6,
     "no_need": 6,
     "game_invite": 6,
-    # 私密分类：云栖不自动发送，留给其他机器人或私聊场景
-    PRIVATE_CATEGORY: 40,
+    # 私密分类：不自动发群，只在跟主人聊天时可用，同样按配额换图
+    "private_flirt": 20,
+    "private_intimate": 20,
+    "private_explicit": 20,
 }
 
 CATEGORY_MERGES: dict[str, str] = {
@@ -252,21 +266,26 @@ def archive_image(category: str, filename: str, *, reason: str, note: str = "", 
 
 
 def ensure_private_category() -> None:
-    """Make sure the private category exists and never auto-sends from Cloud."""
+    """Make sure every private category exists and never auto-sends from Cloud."""
     index = load_meme_index()
-    payload = index.setdefault("categories", {}).setdefault(PRIVATE_CATEGORY, {})
-    if not isinstance(payload, dict):
-        payload = {}
-        index["categories"][PRIVATE_CATEGORY] = payload
-    before = dict(payload)
-    payload.update({
-        "label": "私密暧昧",
-        "description": "偏暧昧或色情的图，云栖不自动发送，留给其他机器人或私聊场景。",
-        "use_cases": [],
-        "avoid_when": ["群聊", "云栖自动发送"],
-        "auto_send_enabled": False,
-    })
-    if before != payload:
+    changed = False
+    for name in PRIVATE_CATEGORIES:
+        payload = index.setdefault("categories", {}).setdefault(name, {})
+        if not isinstance(payload, dict):
+            payload = {}
+            index["categories"][name] = payload
+        before = dict(payload)
+        label, description = PRIVATE_LABELS[name]
+        payload.update({
+            "label": label,
+            "description": description,
+            "use_cases": [],
+            "avoid_when": ["群聊", "云栖自动发送"],
+            "audience": "owner_only",
+            "auto_send_enabled": False,
+        })
+        changed = changed or before != payload
+    if changed:
         save_meme_index(index)
 
 
@@ -282,6 +301,9 @@ def move_to_private_category(source_category: str, filename: str, *, rule: str =
         True when the file was moved and re-indexed as private.
     """
     name = Path(filename).name
+    target_category = PRIVATE_RULE_CATEGORY.get(rule) or PRIVATE_CATEGORY
+    if source_category == target_category:
+        return True
     candidates = (
         Path(MEMES_DIR) / source_category / name,
         ARCHIVE_DIR / source_category / name,
@@ -290,7 +312,7 @@ def move_to_private_category(source_category: str, filename: str, *, rule: str =
     if source is None:
         logger.warning("[MemeArchive] private move skipped, file missing: %s/%s", source_category, name)
         return False
-    target_dir = Path(MEMES_DIR) / PRIVATE_CATEGORY
+    target_dir = Path(MEMES_DIR) / target_category
     target = target_dir / name
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -315,9 +337,9 @@ def move_to_private_category(source_category: str, filename: str, *, rule: str =
         images.remove(dropped)
     entry = dict(dropped) if dropped else {}
     entry.update({
-        "category": PRIVATE_CATEGORY,
+        "category": target_category,
         "filename": target.name,
-        "relative_path": f"memes/{PRIVATE_CATEGORY}/{target.name}",
+        "relative_path": f"memes/{target_category}/{target.name}",
         "auto_send_enabled": False,
     })
     entry.setdefault("title", Path(name).stem)
@@ -327,17 +349,25 @@ def move_to_private_category(source_category: str, filename: str, *, rule: str =
         entry["private_rule"] = rule
     images.append(entry)
     index["images"] = images
-    payload = index.setdefault("categories", {}).setdefault(PRIVATE_CATEGORY, {})
+    payload = index.setdefault("categories", {}).setdefault(target_category, {})
+    label, description = PRIVATE_LABELS[target_category]
     payload.update({
-        "label": "私密暧昧",
-        "description": "偏暧昧或色情的图，云栖不自动发送，留给其他机器人或私聊场景。",
+        "label": label,
+        "description": description,
         "use_cases": [],
         "avoid_when": ["群聊", "云栖自动发送"],
+        "audience": "owner_only",
         "auto_send_enabled": False,
     })
     save_meme_index(index)
     _drop_manifest_entry(source_category, name)
-    logger.info("[MemeArchive] moved to private: from=%s filename=%s rule=%s", source_category, name, rule)
+    logger.info(
+        "[MemeArchive] moved to private: from=%s to=%s filename=%s rule=%s",
+        source_category,
+        target_category,
+        name,
+        rule,
+    )
     return True
 
 

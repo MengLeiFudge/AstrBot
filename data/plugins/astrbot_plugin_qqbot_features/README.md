@@ -278,7 +278,7 @@
   10. 看不出情绪、糊到认不出内容。
   清单外的情况按萌度、表达力、画质正常给分；光腿、短裙、赤脚、躺姿、伸手这类正常可爱插画不归档。
 - 每条归档记录都带具体原因 `rule`（上表十项加画质低、分类不合适、重复），审核时能直接看到命中了哪一条，不再只写笼统的 unfit。
-- 偏暧昧或色情的图（前三条规则）不删也不丢分销毁：迁入 `private_suggestive` 分类，该分类 `auto_send_enabled=false`，云栖不会自动发送，但文件保留给其他机器人或私聊场景。
+- 偏暧昧或色情的图（前三条规则）不删也不丢分销毁，按程度迁入三个私密分类：`private_flirt`（暧昧调情）、`private_intimate`（亲密接触）、`private_explicit`（露点裸露）。三者都是普通分类、各自配额 20 张，超了就按排名归入 `archive`；区别是 `auto_send_enabled=false` 且 `audience=owner_only`，云栖不往群里自动发，只在跟主人聊天时可用。
 - 新图入库前先查重：内容 sha256 相同的直接跳过；感知哈希（dHash）汉明距离 6 以内的当作同一张图（能拓 QQ 重压缩）；同分类描述相似度 0.7 以上的当作同款，只保留分高的那张。
 - `meme_manager_send_check_enabled` / `meme_manager_send_check_timeout_seconds`
   - 默认开启，选中表情后必须由图片模型实际读图确认才发送，不依赖图库标题或描述；读图超时或未通过则本次不发该表情，并把该图标记为停用。
@@ -311,7 +311,7 @@
 - JM 下载图片、构建中间产物和每次发送的加密 PDF 副本只写入 AstrBot Core temp 下的 `qqbot_features\jmcomic\`，完成、失败或超时后清理。未加密标准 PDF 持久保存在 `qqbot_features_runtime\comic_pdf_cache\JM<作品ID>-【作者】标题\`；每目录只有 `metadata.json` 和一个或多个校验过的 PDF，默认受 10 GiB LRU 上限约束。
 - Lolicon 元数据写入 `db\lolicon.sqlite3`，图片不再下载到本地；菜单图、Arc 猜歌面板、shapez 渲染图和临时面板写入 AstrBot Core 的 `data\temp\qqbot_features\` 子目录，进入 Core `temp_dir_max_size` 容量清理范围。插件后台只删除超过安全窗口的重复图片副本，不做独立按日期清理；旧 AI 记忆、TTS、头像和 shapez 静态旧目录不再作为日常运行态保留。
 - 使用 `data\plugin_data\meme_manager` 作为本地表情包运行态目录；这是兼容保留的数据路径，不再对应独立 AstrBot 插件。图库不删图：超过配额、判定不合格或竞争失败的表情包按原分类移入 `data\plugin_data\meme_manager\archive\<分类>\`，同目录 `archive.json` 记录总分、四个分项、归档原因和时间，需要时可按分类和分数取回。
-- 人工审核走 `.codex/drafts/build_meme_review.py` 生成的静态页（输出到 `D:\Desktop\meme-review`）：默认只列异常归档（不合格、整类归档、疑似重复），正常挤出（超配额、被新图顶掉）不进待审列表；可右键或按卡片按钮标恢复/私密/删除并写原因备注，导出后由 `.codex/drafts/apply_review.py` 执行。
+- 人工审核走本地服务 `.codex/drafts/review_server.py`（`http://127.0.0.1:8799`，或双击 `D:\Desktop\start-meme-review.bat`）：默认只列异常归档，正常挤出（超配额、被新图顶掉）不进待审列表；点删除立即删文件、点私密立即迁入对应私密分类、点恢复立即搬回图库并由模型自动判定归哪个分类，卡片随即从列表消失。
 - 旧公开群上下文快照不再作为 prompt 事实源，也不提供群聊记录导出命令。
 - 不提交运行态数据、QQ 登录态、token、数据库或日志。
 - RightCodes API Key 直接填写在本插件配置字段 `api_key`，不写入插件源码，也不再读取旧 `.env`。

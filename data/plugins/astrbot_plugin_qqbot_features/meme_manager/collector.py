@@ -27,13 +27,12 @@ from .library_plan import (
     MIN_ENTRY_TOTAL,
     PHASH_MAX_DISTANCE,
     PRIVATE_CATEGORY,
+    PRIVATE_RULE_CATEGORY,
     PRIVATE_RULES,
     SCORE_VERSION,
     TIE_MARGIN,
     archive_image,
     ensure_private_category,
-    TIE_MARGIN,
-    archive_image,
     find_similar_caption,
     image_phash,
     phash_distance,
@@ -324,6 +323,23 @@ class MemeAutoCollector:
         return str(saved["filename"])
 
     def _store_private(self, content: bytes, extension: str, caption: str, rule: str, phash: str) -> str | None:
+        """Store one suggestive image into the matching private category that is never auto-sent."""
+        category = PRIVATE_RULE_CATEGORY.get(rule) or PRIVATE_CATEGORY
+        try:
+            with io.BytesIO(content) as stream:
+                upload = FileStorage(stream=stream, filename=f"{hashlib.sha256(content).hexdigest()}{extension}")
+                saved = add_emoji_to_category(category, upload)
+        except DuplicateEmojiError:
+            return None
+        upsert_image_metadata(category, saved["filename"], {
+            "title": caption.strip()[:80],
+            "content_caption": caption.strip()[:300],
+            "emotion_tags": [category],
+            "auto_send_enabled": False,
+        })
+        ensure_private_category()
+        logger.info("[MemeCollector] collected private meme: rule=%s category=%s", rule, category)
+        return str(saved["filename"])
         """Store one suggestive image into the private category that is never auto-sent."""
         try:
             with io.BytesIO(content) as stream:
