@@ -154,6 +154,25 @@ def quota_of(category: str) -> int:
     return CATEGORY_QUOTAS.get(category, DEFAULT_QUOTA)
 
 
+def canonical_category(category: str) -> str:
+    """Map a retired category to the one that took its place.
+
+    Args:
+        category: Category directory name, possibly retired.
+
+    Returns:
+        Current category name, falling back to the catch-all category.
+    """
+    seen = set()
+    name = category
+    while name in CATEGORY_MERGES and name not in seen:
+        seen.add(name)
+        name = CATEGORY_MERGES[name]
+    if name in CATEGORY_QUOTAS:
+        return name
+    return "see" if "see" in CATEGORY_QUOTAS else name
+
+
 def recency_bonus(entry: dict) -> float:
     """Return the freshness bonus: 15 points on day one, losing 0.5 a day until zero."""
     added_at = float(entry.get("added_at") or 0)
@@ -502,7 +521,7 @@ def restore_image(category: str, filename: str, *, target_category: str = "") ->
     """Move one archived image back into the library, keeping its description and score."""
     name = Path(filename).name
     source = ARCHIVE_DIR / category / name
-    target = target_category or category
+    target = target_category or canonical_category(category)
     target_dir = Path(MEMES_DIR) / target
     if not source.is_file():
         logger.warning("[MemeArchive] archived file missing: category=%s filename=%s", category, name)
