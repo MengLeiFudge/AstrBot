@@ -59,16 +59,23 @@ DRAW_MODEL_ATTEMPT_LIMIT = 4
 DRAW_DEFAULT_IMAGE_SIZE = "4096x4096"
 DRAW_DEFAULT_LANDSCAPE_SIZE = "4096x2304"
 DRAW_DEFAULT_PORTRAIT_SIZE = "2304x4096"
-DRAW_DEFAULT_BATCH_SIZE = "1024x1024"
 DRAW_IMAGE_SIZE_RE = re.compile(r"^[1-9][0-9]{2,4}x[1-9][0-9]{2,4}$")
-DRAW_PORTRAIT_PROMPT_HINTS = ("竖图", "竖幅", "竖版", "竖构图")
-DRAW_LANDSCAPE_PROMPT_HINTS = ("横图", "横幅", "横版", "横构图")
 DRAW_SIZE_LEVELS: dict[str, dict[str, str]] = {
     "1k": {"square": "1024x1024", "landscape": "1536x1024", "portrait": "1024x1536"},
     "2k": {"square": "2048x2048", "landscape": "2048x1152", "portrait": "1152x2048"},
     "4k": {"square": "4096x4096", "landscape": "4096x2304", "portrait": "2304x4096"},
 }
-DRAW_SIZE_LEVEL_RE = re.compile(r"(1k|2k|4k)(?=$|[\s，,。.!！?？、；;：:])", re.IGNORECASE)
+DRAW_COMMAND_PREFIX_RE = re.compile(r"^(文生|图生|头像生)")
+DRAW_COMMAND_BASES = {"文生": "文生图", "图生": "图生图", "头像生": "头像生图"}
+DRAW_ORIENTATION_WORDS = (
+    ("横图", "landscape"),
+    ("横幅", "landscape"),
+    ("横版", "landscape"),
+    ("竖图", "portrait"),
+    ("竖幅", "portrait"),
+    ("竖版", "portrait"),
+)
+DRAW_LEVEL_TOKEN_RE = re.compile(r"(1k|2k|4k)", re.IGNORECASE)
 _DRAW_MODEL_VERSION_RE = re.compile(r"(\d+(?:\.\d+)*)")
 _DRAW_MODEL_CACHE: dict[tuple[str, str], tuple[float, tuple[str, ...]]] = {}
 _DRAW_MODEL_CACHE_LOCK = asyncio.Lock()
@@ -84,7 +91,7 @@ _DRAW_POINTS_MUTATION_RE = re.compile(
 )
 _DRAW_MODEL_SWITCH_PRIMARY_RE = re.compile(r"^切换\s*生图\s*模型\s*(.*)$", re.IGNORECASE)
 _DRAW_MODEL_SWITCH_ALIAS_RE = re.compile(r"^生图\s*模型\s*(.+)$", re.IGNORECASE)
-DRAW_COMMAND_RE = re.compile(r"^(文生动图|图生动图|头像生动图|文生图|图生图|头像生图)([\s\S]*)$")
+DRAW_DOUDOUYAN_COMMAND = "生成豆豆眼头像"
 DRAW_DOUDOUYAN_COMMAND = "生成豆豆眼头像"
 
 
@@ -95,7 +102,20 @@ class DrawRequest:
     image_urls: tuple[str, ...] = ()
     gif: bool = False
     size_level: str = ""
+    orientation: str = ""
 
+
+@dataclass(frozen=True, slots=True)
+class DrawCommand:
+    """One parsed draw command: mode words, level, orientation, and the prompt."""
+
+    base: str
+    prompt: str
+    gif: bool = False
+    size_level: str = ""
+    orientation: str = ""
+    base_end: int = 0
+    prompt_offset: int = 0
 
 @dataclass(frozen=True, slots=True)
 class DrawResult:
@@ -134,33 +154,23 @@ class DrawImageSizes:
     square: str = DRAW_DEFAULT_IMAGE_SIZE
     landscape: str = DRAW_DEFAULT_LANDSCAPE_SIZE
     portrait: str = DRAW_DEFAULT_PORTRAIT_SIZE
-    batch: str = DRAW_DEFAULT_BATCH_SIZE
 
-    def resolve(self, prompt: str, *, batch: bool = False, level: str = "") -> str:
+    def resolve(self, level: str = "", orientation: str = "") -> str:
         """Pick the requested size for one image call.
 
         Args:
-            prompt: Final prompt sent to the image model.
-            batch: Whether the call belongs to a four-image preset batch.
             level: Explicit 1k / 2k / 4k wording from the command, if any.
+            orientation: "square", "landscape", or "portrait".
 
         Returns:
-            The configured size matching the batch flag, level, and prompt wording.
+            The size preset for that level and orientation, or the configured default.
         """
-        if batch:
-            return self.batch
-        if any(hint in prompt for hint in DRAW_PORTRAIT_PROMPT_HINTS):
-            orientation = "portrait"
-        elif any(hint in prompt for hint in DRAW_LANDSCAPE_PROMPT_HINTS):
-            orientation = "landscape"
-        else:
-            orientation = "square"
+
+        chosen = orientation or "square"
         preset = DRAW_SIZE_LEVELS.get(level)
         if preset is not None:
-            return preset[orientation]
-        return getattr(self, orientation)
-
-
+            return preset[chosen]
+        return getattr(self, chosen)
 
 @dataclass(frozen=True, slots=True)
 class DrawConfig:
@@ -228,8 +238,7 @@ class DrawClient:
         """
         if len(requests) not in (1, 4):
             raise ValueError("生图批次必须包含一张或四张")
-        batch = len(requests) > 1
-        tasks = [asyncio.create_task(self.draw(request, batch=batch)) for request in requests]
+        tasks = [asyncio.create_task(self.draw(request)) for request in requests]
         try:
             return tuple(await asyncio.gather(*tasks, return_exceptions=True))
         finally:
@@ -238,7 +247,7 @@ class DrawClient:
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def draw(self, request: DrawRequest, *, batch: bool = False) -> DrawResult:
+    async def draw(self, request: DrawRequest) -> DrawResult:
         """Generate one image, falling back to other registered image models."""
 
         if not self.api_key:
@@ -257,7 +266,9 @@ class DrawClient:
                 continue
             attempted.append(model)
             try:
-                return await self._draw_with_model(request, model, self.image_sizes.resolve(request.prompt, batch=batch))
+                return await self._draw_with_model(
+                    request, model, self.image_sizes.resolve(request.size_level, request.orientation)
+                )
             except DrawModelUnavailableError:
                 if refreshed:
                     continue
@@ -711,10 +722,6 @@ def load_draw_config(config=None) -> DrawConfig:
                 get_config_value(config, "draw_image_size_portrait", DRAW_DEFAULT_PORTRAIT_SIZE),
                 DRAW_DEFAULT_PORTRAIT_SIZE,
             ),
-            batch=_normalize_image_size(
-                get_config_value(config, "draw_image_size_batch", DRAW_DEFAULT_BATCH_SIZE),
-                DRAW_DEFAULT_BATCH_SIZE,
-            ),
         ),
     )
 
@@ -742,16 +749,27 @@ def parse_draw_command(text: str) -> DrawRequest | None:
     normalized = text.strip()
     if normalized == DRAW_DOUDOUYAN_COMMAND:
         return DrawRequest(prompt="豆豆眼头像")
-    command = split_draw_command(normalized)
-    if command is None or not command[1]:
+    command = parse_draw_command_text(normalized)
+    if command is None or not command.prompt:
         return None
     if extract_removed_draw_temporary_model(normalized) is not None:
         return None
-    return DrawRequest(prompt=command[1], gif=command[2], size_level=command[3])
+    return DrawRequest(
+        prompt=command.prompt,
+        gif=command.gif,
+        size_level=command.size_level,
+        orientation=command.orientation,
+    )
 
 
 def looks_like_draw_invocation(text: str) -> bool:
-    return split_draw_command(text.strip()) is not None or text.strip() == DRAW_DOUDOUYAN_COMMAND
+    normalized = text.strip()
+    if normalized == DRAW_DOUDOUYAN_COMMAND:
+        return True
+    try:
+        return parse_draw_command_text(normalized) is not None
+    except ValueError:
+        return True
 
 
 def looks_like_draw_feature_request(text: str) -> bool:
@@ -768,56 +786,108 @@ def looks_like_draw_feature_request(text: str) -> bool:
     )
 
 
-def split_draw_command(text: str) -> tuple[str, str, bool, str] | None:
-    """Split a draw command into its base form, prompt, and animation flag.
+def parse_draw_command_text(text: str) -> DrawCommand | None:
+    """Parse a draw command with optional mode, orientation, and level words.
+
+    Accepted shapes, in any order after 文生 / 图生 / 头像生:
+        文生图 横图 1k 文生竖图2k 文生动图 图生 4k 竖图
 
     Args:
         text: Message text without surrounding whitespace or mention components.
 
     Returns:
-        Base command, remaining prompt, whether the command asked for a GIF, and the
-        explicit 1k / 2k / 4k wording;
-        None when the text does not start with a draw command.
+        The parsed command, or None when the text is not a draw command.
+
+    Raises:
+        ValueError: For a level token glued to the prompt, or conflicting mode words.
     """
-    command_match = DRAW_COMMAND_RE.match(text)
-    if command_match is None:
+    normalized = text.strip()
+    if normalized == DRAW_DOUDOUYAN_COMMAND:
+        return DrawCommand(base="头像生图", prompt="豆豆眼头像")
+    prefix_match = DRAW_COMMAND_PREFIX_RE.match(normalized)
+    if prefix_match is None:
         return None
-    command = command_match.group(1)
-    animated = command.endswith("动图")
-    base = f"{command[:-2]}图" if animated else command
-    size_level, consumed = extract_draw_size_level(command_match.group(2))
-    return base, command_match.group(2)[consumed:].strip(), animated, size_level
-
-
-def extract_draw_size_level(text: str) -> tuple[str, int]:
-    """Read a leading 1k / 2k / 4k token and report how much text it occupied.
-
-    Args:
-        text: Text directly after the draw command.
-
-    Returns:
-        The lowercased level, empty when the token is absent, plus the number of
-        characters to skip from the start of text.
-    """
-    stripped = text.lstrip()
-    offset = len(text) - len(stripped)
-    match = DRAW_SIZE_LEVEL_RE.match(stripped)
-    if match is None:
-        return "", 0
-    return match.group(1).lower(), offset + match.end()
-
-
-def extract_draw_prompt(text: str) -> str | None:
-    """Extract text after a draw prefix without requiring or stripping an image suffix.
-
-    Args:
-        text: Message text without surrounding whitespace or mention components.
-
-    Returns:
-        The complete prompt, an empty string for a bare prefix, or None for other messages.
-    """
-    command = split_draw_command(text)
-    return None if command is None else command[1]
+    position = prefix_match.end()
+    mode_seen = False
+    gif = False
+    orientation = ""
+    level = ""
+    if normalized.startswith("动图", position):
+        gif, mode_seen, position = True, True, position + 2
+    elif normalized.startswith("图", position):
+        mode_seen, position = True, position + 1
+    while True:
+        spaced_before = position < len(normalized) and normalized[position].isspace()
+        while position < len(normalized) and normalized[position].isspace():
+            position += 1
+        rest = normalized[position:]
+        if rest.startswith("动图"):
+            if orientation:
+                raise ValueError("动图不能和横图、竖图同时用：横图、竖图、动图三选一")
+            gif = True
+            mode_seen = True
+            position += 2
+            continue
+        orientation_word = next(
+            (word for word, _ in DRAW_ORIENTATION_WORDS if rest.startswith(word)),
+            "",
+        )
+        if orientation_word:
+            wanted = dict(DRAW_ORIENTATION_WORDS)[orientation_word]
+            if gif:
+                raise ValueError("动图不能和横图、竖图同时用：横图、竖图、动图三选一")
+            if orientation and orientation != wanted:
+                raise ValueError("横图和竖图只能选一个")
+            orientation = wanted
+            mode_seen = True
+            position += len(orientation_word)
+            continue
+        level_match = DRAW_LEVEL_TOKEN_RE.match(rest)
+        if level_match is not None:
+            token = level_match.group(1).lower()
+            after_token = position + level_match.end()
+            glued_after = after_token < len(normalized) and not normalized[after_token].isspace()
+            if glued_after:
+                if spaced_before:
+                    break
+                raise ValueError(
+                    f"“{token}”后面要空一格再写提示词，例如“文生图 {token} 一只白猫”"
+                )
+            level = token
+            position = after_token
+            continue
+        break
+    prompt = normalized[position:].strip()
+    while prompt:
+        if prompt.endswith("动图"):
+            if orientation:
+                raise ValueError("动图不能和横图、竖图同时用：横图、竖图、动图三选一")
+            gif = True
+            mode_seen = True
+            prompt = prompt[:-2].strip()
+            continue
+        trailing_word = next((word for word, _ in DRAW_ORIENTATION_WORDS if prompt.endswith(word)), "")
+        if not trailing_word:
+            break
+        wanted = dict(DRAW_ORIENTATION_WORDS)[trailing_word]
+        if gif:
+            raise ValueError("动图不能和横图、竖图同时用：横图、竖图、动图三选一")
+        if orientation and orientation != wanted:
+            raise ValueError("横图和竖图只能选一个")
+        orientation = wanted
+        mode_seen = True
+        prompt = prompt[: -len(trailing_word)].strip()
+    if not mode_seen and not level:
+        return None
+    return DrawCommand(
+        base=DRAW_COMMAND_BASES[prefix_match.group(1)],
+        prompt=prompt,
+        gif=gif,
+        size_level=level,
+        orientation=orientation,
+        base_end=prefix_match.end(),
+        prompt_offset=position,
+    )
 
 
 def extract_removed_draw_temporary_model(text: str) -> str | None:

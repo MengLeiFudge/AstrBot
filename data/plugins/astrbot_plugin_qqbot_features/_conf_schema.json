@@ -45,25 +45,19 @@
     "description": "普通生图尺寸",
     "type": "string",
     "default": "4096x4096",
-    "hint": "格式为宽x高，写成非法值时回退默认；实测 4096x4096 单张约 2 分钟。"
+    "hint": "格式为宽x高，写成非法值时回退默认；实测 4096x4096 单张约 70–115 秒，四张并发墙钟仍是一张的时间。"
   },
   "draw_image_size_landscape": {
     "description": "横图尺寸",
     "type": "string",
     "default": "4096x2304",
-    "hint": "提示词出现横图、横幅、横版、横构图时改用该尺寸。"
+    "hint": "指令后写“横图”时改用该尺寸，也可以写 1k / 2k / 4k 档位切换。"
   },
   "draw_image_size_portrait": {
     "description": "竖图尺寸",
     "type": "string",
     "default": "2304x4096",
-    "hint": "提示词出现竖图、竖幅、竖版、竖构图时改用该尺寸。"
-  },
-  "draw_image_size_batch": {
-    "description": "豆豆眼四连发生图尺寸",
-    "type": "string",
-    "default": "1024x1024",
-    "hint": "四张并行时用较小尺寸避免顶到生图总超时；与普通生图尺寸分开配置。"
+    "hint": "指令后写“竖图”时改用该尺寸，也可以写 1k / 2k / 4k 档位切换。"
   },
   "jmcomic_enabled": {
     "description": "启用 JM 下载转 PDF",

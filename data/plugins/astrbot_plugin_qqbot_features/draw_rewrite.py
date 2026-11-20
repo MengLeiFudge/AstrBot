@@ -145,7 +145,9 @@ def merge_rewritten_draw_request(
         prompt=result.prompt,
         model=request.model,
         image_urls=result.image_urls or request.image_urls[:MAX_REWRITE_IMAGES],
+        gif=request.gif,
         size_level=request.size_level,
+        orientation=request.orientation,
     )
 
 
