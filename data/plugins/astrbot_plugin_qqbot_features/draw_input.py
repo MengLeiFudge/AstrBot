@@ -11,7 +11,7 @@ import re
 
 import httpx
 
-from .draw_service import DRAW_DOUDOUYAN_COMMAND, DrawRequest, load_draw_reference_image
+from .draw_service import DRAW_DOUDOUYAN_COMMAND, DrawRequest, extract_draw_size_level, load_draw_reference_image
 
 
 STANDARD_DRAW_PREFIX = re.compile(r"^\s*(文生动图|图生动图|头像生动图|文生图|图生图|头像生图)")
@@ -115,7 +115,9 @@ async def prepare_explicit_draw_request(
     mode = match.group(1)
     animated = mode.endswith("动图")
     base_mode = f"{mode[:-2]}图" if animated else mode
-    prompt = text[match.end():].strip()
+    after_command = text[match.end():]
+    size_level, consumed = extract_draw_size_level(after_command)
+    prompt = after_command[consumed:].strip()
     mentions = []
     offset = 0
     for segment in segments:
@@ -130,13 +132,14 @@ async def prepare_explicit_draw_request(
     if mentions:
         if base_mode != "头像生图":
             raise ValueError("提示词中请用文字描述对象；指定头像请使用“头像生图 @某人 提示词”")
-        if len(mentions) != 1 or text[match.end():mentions[0][0]].strip():
+        prefix = text[match.end():mentions[0][0]]
+        if len(mentions) != 1 or prefix[consumed:].strip():
             raise ValueError("头像目标不唯一或位置不明确，请将唯一的 @ 紧跟在“头像生图”后")
         target = mentions[0][1]
     if not prompt:
         raise ValueError("请在生图指令后填写提示词")
     if base_mode == "文生图":
-        return DrawRequest(prompt=prompt, model=model, gif=animated)
+        return DrawRequest(prompt=prompt, model=model, gif=animated, size_level=size_level)
     if "豆豆眼" in prompt and animated:
         raise ValueError("豆豆眼预设是静态四张，不支持动图；请用“图生图 豆豆眼”或“文生动图 提示词”")
 
@@ -197,7 +200,7 @@ async def prepare_explicit_draw_request(
                 if not re.match(r"^(?:https?://|file://|/|[A-Za-z]:[\\/])", source):
                     raise ValueError("图片地址已失效，请重新发送")
         return await preload_draw_references(
-            DrawRequest(prompt=prompt, model=model, image_urls=(source,), gif=animated)
+            DrawRequest(prompt=prompt, model=model, image_urls=(source,), gif=animated, size_level=size_level)
         )
 
 

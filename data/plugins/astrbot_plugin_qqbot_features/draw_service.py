@@ -63,6 +63,12 @@ DRAW_DEFAULT_BATCH_SIZE = "1024x1024"
 DRAW_IMAGE_SIZE_RE = re.compile(r"^[1-9][0-9]{2,4}x[1-9][0-9]{2,4}$")
 DRAW_PORTRAIT_PROMPT_HINTS = ("竖图", "竖幅", "竖版", "竖构图")
 DRAW_LANDSCAPE_PROMPT_HINTS = ("横图", "横幅", "横版", "横构图")
+DRAW_SIZE_LEVELS: dict[str, dict[str, str]] = {
+    "1k": {"square": "1024x1024", "landscape": "1536x1024", "portrait": "1024x1536"},
+    "2k": {"square": "2048x2048", "landscape": "2048x1152", "portrait": "1152x2048"},
+    "4k": {"square": "4096x4096", "landscape": "4096x2304", "portrait": "2304x4096"},
+}
+DRAW_SIZE_LEVEL_RE = re.compile(r"(1k|2k|4k)(?=$|[\s，,。.!！?？、；;：:])", re.IGNORECASE)
 _DRAW_MODEL_VERSION_RE = re.compile(r"(\d+(?:\.\d+)*)")
 _DRAW_MODEL_CACHE: dict[tuple[str, str], tuple[float, tuple[str, ...]]] = {}
 _DRAW_MODEL_CACHE_LOCK = asyncio.Lock()
@@ -88,6 +94,7 @@ class DrawRequest:
     model: str = DRAW_DEFAULT_MODEL
     image_urls: tuple[str, ...] = ()
     gif: bool = False
+    size_level: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,23 +136,30 @@ class DrawImageSizes:
     portrait: str = DRAW_DEFAULT_PORTRAIT_SIZE
     batch: str = DRAW_DEFAULT_BATCH_SIZE
 
-    def resolve(self, prompt: str, *, batch: bool = False) -> str:
+    def resolve(self, prompt: str, *, batch: bool = False, level: str = "") -> str:
         """Pick the requested size for one image call.
 
         Args:
             prompt: Final prompt sent to the image model.
             batch: Whether the call belongs to a four-image preset batch.
+            level: Explicit 1k / 2k / 4k wording from the command, if any.
 
         Returns:
-            The configured size matching the batch flag and prompt wording.
+            The configured size matching the batch flag, level, and prompt wording.
         """
         if batch:
             return self.batch
         if any(hint in prompt for hint in DRAW_PORTRAIT_PROMPT_HINTS):
-            return self.portrait
-        if any(hint in prompt for hint in DRAW_LANDSCAPE_PROMPT_HINTS):
-            return self.landscape
-        return self.square
+            orientation = "portrait"
+        elif any(hint in prompt for hint in DRAW_LANDSCAPE_PROMPT_HINTS):
+            orientation = "landscape"
+        else:
+            orientation = "square"
+        preset = DRAW_SIZE_LEVELS.get(level)
+        if preset is not None:
+            return preset[orientation]
+        return getattr(self, orientation)
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -733,7 +747,7 @@ def parse_draw_command(text: str) -> DrawRequest | None:
         return None
     if extract_removed_draw_temporary_model(normalized) is not None:
         return None
-    return DrawRequest(prompt=command[1], gif=command[2])
+    return DrawRequest(prompt=command[1], gif=command[2], size_level=command[3])
 
 
 def looks_like_draw_invocation(text: str) -> bool:
@@ -754,14 +768,15 @@ def looks_like_draw_feature_request(text: str) -> bool:
     )
 
 
-def split_draw_command(text: str) -> tuple[str, str, bool] | None:
+def split_draw_command(text: str) -> tuple[str, str, bool, str] | None:
     """Split a draw command into its base form, prompt, and animation flag.
 
     Args:
         text: Message text without surrounding whitespace or mention components.
 
     Returns:
-        Base command, remaining prompt, and whether the command asked for a GIF;
+        Base command, remaining prompt, whether the command asked for a GIF, and the
+        explicit 1k / 2k / 4k wording;
         None when the text does not start with a draw command.
     """
     command_match = DRAW_COMMAND_RE.match(text)
@@ -770,7 +785,26 @@ def split_draw_command(text: str) -> tuple[str, str, bool] | None:
     command = command_match.group(1)
     animated = command.endswith("动图")
     base = f"{command[:-2]}图" if animated else command
-    return base, command_match.group(2).strip(), animated
+    size_level, consumed = extract_draw_size_level(command_match.group(2))
+    return base, command_match.group(2)[consumed:].strip(), animated, size_level
+
+
+def extract_draw_size_level(text: str) -> tuple[str, int]:
+    """Read a leading 1k / 2k / 4k token and report how much text it occupied.
+
+    Args:
+        text: Text directly after the draw command.
+
+    Returns:
+        The lowercased level, empty when the token is absent, plus the number of
+        characters to skip from the start of text.
+    """
+    stripped = text.lstrip()
+    offset = len(text) - len(stripped)
+    match = DRAW_SIZE_LEVEL_RE.match(stripped)
+    if match is None:
+        return "", 0
+    return match.group(1).lower(), offset + match.end()
 
 
 def extract_draw_prompt(text: str) -> str | None:

@@ -315,7 +315,7 @@ FEATURES: tuple[FeatureSpec, ...] = (
         lines=(
             "文生图 / 图生图 / 头像生图 [@某人] 提示词：60～150 积分/次（按模型）",
             "动图：文生动图 / 图生动图 / 头像生动图；上游回退静态图时会在成品消息注明",
-            "出图尺寸：默认 4K 方图；提示词写“竖图”或“横图”时改出 4K 竖幅或横幅",
+            "出图尺寸：默认 4k；指令后空一格写 1k / 2k / 4k 可切档位，提示词写“竖图/横图”改画幅",
             "生图模型 / 生图价格：查看当前模型、可用模型与价格",
             "查看积分 / balance / points：查询积分、当前模型和消耗；积分排行：查看全群前 10",
         ),
@@ -1799,6 +1799,7 @@ class QQBotFeaturesPlugin(Star):
             prompt=draw_request.prompt,
             model=balance.model,
             image_urls=draw_request.image_urls,
+            size_level=draw_request.size_level,
         )
         try:
             segments = intent_parts if intent_parts is not None else _raw_event_dict(event).get("message")
@@ -1870,6 +1871,11 @@ class QQBotFeaturesPlugin(Star):
                 start_message = format_draw_start_message(quota)
                 start_message += ("\n提示词来源：豆豆眼预设（完整固定原文）" if preset_parts is not None
                                   else "\n提示词来源：用户话语（无预设）")
+                start_message += "\n本次尺寸：" + self._draw_config.image_sizes.resolve(
+                    draw_requests[0].prompt,
+                    batch=len(draw_requests) > 1,
+                    level=draw_requests[0].size_level,
+                )
                 if preset_parts is not None:
                     start_message += "\n韩文v1和中文v3各生成2张，四张并行，完成后全部发送。本次共扣一次积分。"
                     if natural_intent is not None and natural_intent.source is not None:
