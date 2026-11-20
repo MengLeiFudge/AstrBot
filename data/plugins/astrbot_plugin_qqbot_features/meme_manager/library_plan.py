@@ -556,7 +556,7 @@ def rebalance_category(category: str) -> int:
     best = max(scored, key=rank_of)
     if rank_of(best) <= rank_of(weakest):
         return 0
-    if not archive_image(category, str(weakest.get("filename") or ""), reason="replaced_by_new"):
+    if not archive_image(category, str(weakest.get("filename") or ""), reason="over_quota"):
         return 0
     if not restore_image(category, str(best.get("filename") or "")):
         return 0

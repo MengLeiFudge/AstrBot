@@ -414,7 +414,7 @@ class MemeAutoCollector:
         weakest = scored[boundary]
         difference = rank_of(newcomer) - rank_of(weakest)
         if difference > TIE_MARGIN:
-            archive_image(category, str(weakest.get("filename") or ""), reason="replaced_by_new")
+            archive_image(category, str(weakest.get("filename") or ""), reason="over_quota")
             logger.info("[MemeCollector] replaced weaker meme: category=%s digest=%s", category, digest)
             return True
         if difference >= -TIE_MARGIN and self._curator is not None:
@@ -426,7 +426,7 @@ class MemeAutoCollector:
             )
             # 结果由 resolve_tie 自己落定，这里不当作已保留
             return False
-        archive_image(category, filename, reason="lost_to_library")
+        archive_image(category, filename, reason="over_quota")
         logger.info("[MemeCollector] newcomer dropped: category=%s digest=%s", category, digest)
         return False
 

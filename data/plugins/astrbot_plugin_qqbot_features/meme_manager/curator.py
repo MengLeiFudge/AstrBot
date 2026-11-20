@@ -359,7 +359,7 @@ class MemeCurator:
             survivors = _keep_by_score(category, labelled, keep)
         for name in labelled:
             if name not in survivors:
-                archive_image(category, name, reason="lost_boundary_rank")
+                archive_image(category, name, reason="over_quota")
 
     async def verify_for_send(self, path: Path, umo: str = "") -> bool:
         """Confirm with a real image read that this meme may be sent now.
