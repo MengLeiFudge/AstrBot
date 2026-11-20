@@ -468,13 +468,16 @@ async def _resolve_provider_id(context: Context, umo: str) -> str:
 
 
 def _reviewable_categories() -> dict[str, str]:
-    """Return category name to description for categories still allowed to send."""
+    """Return category name to description for every real category, owner-only included."""
     index = load_meme_index()
     return {
         name: str(meta.get("description") or name)
         for name, meta in index["categories"].items()
         if isinstance(meta, dict)
-        and meta.get("auto_send_enabled") is not False
+        and (
+            meta.get("auto_send_enabled") is not False
+            or meta.get("audience") == "owner_only"
+        )
         and name not in {".", ".."}
         and Path(name).name == name
     }

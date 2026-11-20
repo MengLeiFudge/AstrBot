@@ -76,9 +76,10 @@ DEFAULT_MEME_PROMPT = {
 
 
 class MemeManagerRuntime:
-    def __init__(self, context: Context, config: dict = None):
+    def __init__(self, context: Context, config: dict = None, owner_qq: str = ""):
         self.context = context
         self.config = config or {}
+        self.owner_qq = str(owner_qq or "")
 
         # 初始化插件
         if not init_plugin():
@@ -1290,12 +1291,24 @@ class MemeManagerRuntime:
             await self.reload_emotions()
         self.curator.start()
 
+    def _is_owner_session(self, event: AstrMessageEvent) -> bool:
+        """私密分类只对主人发起的会话开放。"""
+        if not self.owner_qq:
+            return False
+        try:
+            return str(event.get_sender_id()) == self.owner_qq
+        except Exception:
+            return False
+
     async def _select_sendable_meme(
         self, event: AstrMessageEvent, emotion: str, context_text: str
     ) -> Path | None:
         """选一张模型实际读图确认过的表情，未确认通过的不发。"""
+        allow_owner_only = self._is_owner_session(event)
         for _ in range(2):
-            meme_path = select_meme_for_emotion(emotion, context_text=context_text)
+            meme_path = select_meme_for_emotion(
+                emotion, context_text=context_text, allow_owner_only=allow_owner_only
+            )
             if meme_path is None:
                 return None
             if await self.curator.verify_for_send(meme_path, event.unified_msg_origin):

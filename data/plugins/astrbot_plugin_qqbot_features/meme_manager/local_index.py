@@ -424,23 +424,47 @@ def export_index_for_api() -> dict[str, Any]:
     return normalize_index(index)
 
 
-def select_meme_for_emotion(emotion: str, context_text: str = "") -> Path | None:
+OWNER_ONLY_TRIGGERS = {"shy_flirt", "affection_kiss"}
+
+
+def select_meme_for_emotion(
+    emotion: str, context_text: str = "", allow_owner_only: bool = False
+) -> Path | None:
+    """Pick one meme for an emotion; owner-only pools join only for the owner."""
     index = load_meme_index()
-    category_meta = index.get("categories", {}).get(emotion, {})
-    if isinstance(category_meta, dict) and category_meta.get("auto_send_enabled") is False:
+    categories = index.get("categories", {}) or {}
+    emotion_meta = categories.get(emotion, {})
+    owner_pool: set[str] = set()
+    if allow_owner_only and emotion in OWNER_ONLY_TRIGGERS:
+        owner_pool = {
+            name
+            for name, meta in categories.items()
+            if isinstance(meta, dict) and meta.get("audience") == "owner_only"
+        }
+    pools: set[str] = set(owner_pool)
+    if not (isinstance(emotion_meta, dict) and emotion_meta.get("auto_send_enabled") is False):
+        pools.add(emotion)
+    if not pools:
         return None
 
     candidates = [
         entry
         for entry in index.get("images", [])
         if isinstance(entry, dict)
-        and entry.get("category") == emotion
-        and entry.get("auto_send_enabled", True) is True
+        and entry.get("category") in pools
+        and (
+            entry.get("auto_send_enabled", True) is True
+            or entry.get("category") in owner_pool
+        )
     ]
     candidates = [
         entry
         for entry in candidates
-        if (Path(MEMES_DIR) / emotion / str(entry.get("filename") or "")).is_file()
+        if (
+            Path(MEMES_DIR)
+            / str(entry.get("category") or "")
+            / str(entry.get("filename") or "")
+        ).is_file()
     ]
     if not candidates:
         return None
@@ -459,7 +483,11 @@ def select_meme_for_emotion(emotion: str, context_text: str = "") -> Path | None
     if selected is None:
         return None
     _remember_recent(selected)
-    return Path(MEMES_DIR) / emotion / str(selected.get("filename") or "")
+    return (
+        Path(MEMES_DIR)
+        / str(selected.get("category") or emotion)
+        / str(selected.get("filename") or "")
+    )
 
 
 def normalize_index(raw: dict[str, Any]) -> dict[str, Any]:

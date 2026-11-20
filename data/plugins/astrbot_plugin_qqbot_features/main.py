@@ -428,6 +428,7 @@ class QQBotFeaturesPlugin(Star):
                 config,
                 prefix="meme_manager",
             ),
+            owner_qq=OWNER_QQ,
         )
         self._sub2api_config = load_sub2api_config(config)
         self._sub2api_usage_cache = Sub2APIUsageCache()
