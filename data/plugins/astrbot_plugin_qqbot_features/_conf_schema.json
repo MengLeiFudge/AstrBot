@@ -51,13 +51,13 @@
     "description": "横图尺寸",
     "type": "string",
     "default": "4096x2304",
-    "hint": "指令后写“横图”时改用该尺寸，也可以写 1k / 2k / 4k 档位切换。"
+    "hint": "指令写成“图生横图/文生横图”时改用该尺寸，档位仍用 1k / 2k / 4k 紧跟其后。"
   },
   "draw_image_size_portrait": {
     "description": "竖图尺寸",
     "type": "string",
     "default": "2304x4096",
-    "hint": "指令后写“竖图”时改用该尺寸，也可以写 1k / 2k / 4k 档位切换。"
+    "hint": "指令写成“文生竖图/图生竖图”时改用该尺寸，档位仍用 1k / 2k / 4k 紧跟其后。"
   },
   "jmcomic_enabled": {
     "description": "启用 JM 下载转 PDF",

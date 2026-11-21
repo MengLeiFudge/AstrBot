@@ -67,14 +67,8 @@ DRAW_SIZE_LEVELS: dict[str, dict[str, str]] = {
 }
 DRAW_COMMAND_PREFIX_RE = re.compile(r"^(文生|图生|头像生)")
 DRAW_COMMAND_BASES = {"文生": "文生图", "图生": "图生图", "头像生": "头像生图"}
-DRAW_ORIENTATION_WORDS = (
-    ("横图", "landscape"),
-    ("横幅", "landscape"),
-    ("横版", "landscape"),
-    ("竖图", "portrait"),
-    ("竖幅", "portrait"),
-    ("竖版", "portrait"),
-)
+DRAW_ORIENTATION_CHARS = {"横": "landscape", "竖": "portrait", "动": ""}
+DRAW_STRAY_MODE_RE = re.compile(r"(?:^|\s)(横图|竖图|动图|横幅|横版|竖幅|竖版)(?:\s|$)")
 DRAW_LEVEL_TOKEN_RE = re.compile(r"(1k|2k|4k)", re.IGNORECASE)
 _DRAW_MODEL_VERSION_RE = re.compile(r"(\d+(?:\.\d+)*)")
 _DRAW_MODEL_CACHE: dict[tuple[str, str], tuple[float, tuple[str, ...]]] = {}
@@ -787,19 +781,16 @@ def looks_like_draw_feature_request(text: str) -> bool:
 
 
 def parse_draw_command_text(text: str) -> DrawCommand | None:
-    """Parse a draw command with optional mode, orientation, and level words.
-
-    Accepted shapes, in any order after 文生 / 图生 / 头像生:
-        文生图 横图 1k 文生竖图2k 文生动图 图生 4k 竖图
+    """Parse one draw command written as 文生图 / 文生竖图2k / 文生动图 [提示词].
 
     Args:
         text: Message text without surrounding whitespace or mention components.
 
     Returns:
-        The parsed command, or None when the text is not a draw command.
+        The parsed command, or None when the text does not start with a draw command.
 
     Raises:
-        ValueError: For a level token glued to the prompt, or conflicting mode words.
+        ValueError: For a level token glued to the prompt, or a mode word in the wrong place.
     """
     normalized = text.strip()
     if normalized == DRAW_DOUDOUYAN_COMMAND:
@@ -808,84 +799,46 @@ def parse_draw_command_text(text: str) -> DrawCommand | None:
     if prefix_match is None:
         return None
     position = prefix_match.end()
-    mode_seen = False
-    gif = False
     orientation = ""
-    level = ""
-    if normalized.startswith("动图", position):
-        gif, mode_seen, position = True, True, position + 2
+    gif = False
+    mode_char = normalized[position : position + 1]
+    if mode_char in DRAW_ORIENTATION_CHARS and normalized.startswith("图", position + 1):
+        orientation = DRAW_ORIENTATION_CHARS[mode_char]
+        gif = mode_char == "动"
+        position += 2
     elif normalized.startswith("图", position):
-        mode_seen, position = True, position + 1
-    while True:
-        spaced_before = position < len(normalized) and normalized[position].isspace()
-        while position < len(normalized) and normalized[position].isspace():
-            position += 1
-        rest = normalized[position:]
-        if rest.startswith("动图"):
-            if orientation:
-                raise ValueError("动图不能和横图、竖图同时用：横图、竖图、动图三选一")
-            gif = True
-            mode_seen = True
-            position += 2
-            continue
-        orientation_word = next(
-            (word for word, _ in DRAW_ORIENTATION_WORDS if rest.startswith(word)),
-            "",
-        )
-        if orientation_word:
-            wanted = dict(DRAW_ORIENTATION_WORDS)[orientation_word]
-            if gif:
-                raise ValueError("动图不能和横图、竖图同时用：横图、竖图、动图三选一")
-            if orientation and orientation != wanted:
-                raise ValueError("横图和竖图只能选一个")
-            orientation = wanted
-            mode_seen = True
-            position += len(orientation_word)
-            continue
-        level_match = DRAW_LEVEL_TOKEN_RE.match(rest)
-        if level_match is not None:
-            token = level_match.group(1).lower()
-            after_token = position + level_match.end()
-            glued_after = after_token < len(normalized) and not normalized[after_token].isspace()
-            if glued_after:
-                if spaced_before:
-                    break
-                raise ValueError(
-                    f"“{token}”后面要空一格再写提示词，例如“文生图 {token} 一只白猫”"
-                )
+        position += 1
+    else:
+        return None
+    command_end = position
+    spaced_before = position < len(normalized) and normalized[position].isspace()
+    while position < len(normalized) and normalized[position].isspace():
+        position += 1
+    level = ""
+    level_match = DRAW_LEVEL_TOKEN_RE.match(normalized[position:])
+    if level_match is not None:
+        token = level_match.group(1).lower()
+        after_token = position + level_match.end()
+        glued_after = after_token < len(normalized) and not normalized[after_token].isspace()
+        if glued_after and not spaced_before:
+            raise ValueError(
+                f"“{token}”后面要空一格再写提示词，例如“文生图 {token} 一只白猫”"
+            )
+        if not glued_after:
             level = token
             position = after_token
-            continue
-        break
     prompt = normalized[position:].strip()
-    while prompt:
-        if prompt.endswith("动图"):
-            if orientation:
-                raise ValueError("动图不能和横图、竖图同时用：横图、竖图、动图三选一")
-            gif = True
-            mode_seen = True
-            prompt = prompt[:-2].strip()
-            continue
-        trailing_word = next((word for word, _ in DRAW_ORIENTATION_WORDS if prompt.endswith(word)), "")
-        if not trailing_word:
-            break
-        wanted = dict(DRAW_ORIENTATION_WORDS)[trailing_word]
-        if gif:
-            raise ValueError("动图不能和横图、竖图同时用：横图、竖图、动图三选一")
-        if orientation and orientation != wanted:
-            raise ValueError("横图和竖图只能选一个")
-        orientation = wanted
-        mode_seen = True
-        prompt = prompt[: -len(trailing_word)].strip()
-    if not mode_seen and not level:
-        return None
+    if DRAW_STRAY_MODE_RE.search(prompt) is not None:
+        raise ValueError(
+            "画幅词要写在“生”和“图”之间，例如“文生竖图2k 一只白猫”“图生横图 换成水彩”；动图写成“文生动图 提示词”"
+        )
     return DrawCommand(
         base=DRAW_COMMAND_BASES[prefix_match.group(1)],
         prompt=prompt,
         gif=gif,
         size_level=level,
         orientation=orientation,
-        base_end=prefix_match.end(),
+        base_end=command_end,
         prompt_offset=position,
     )
 
@@ -893,7 +846,11 @@ def parse_draw_command_text(text: str) -> DrawCommand | None:
 def extract_removed_draw_temporary_model(text: str) -> str | None:
     if text.lstrip().startswith(("文生图", "图生图", "头像生图")):
         return None
-    rest = extract_draw_prompt(text.strip())
+    try:
+        command = parse_draw_command_text(text.strip())
+    except ValueError:
+        return None
+    rest = command.prompt if command is not None else ""
     if not rest:
         return None
     bracket_match = re.match(r"^\[([^\]]+)\](?:\s+|$)", rest)
@@ -911,8 +868,8 @@ def looks_like_draw_command(text: str) -> bool:
 
 def format_draw_missing_prompt_message() -> str:
     return (
-        "请填写提示词。用法：文生图 提示词；图生图 提示词（附图或引用图）；头像生图 [@某人] 提示词；"
-        "把“生图”换成“生动图”即可生成动图（文生动图 / 图生动图 / 头像生动图）。"
+        "请填写提示词。用法：文生图 提示词；图生图 提示词（附图或引用图）；头像生图 [@某人] 提示词。"
+        "档位紧跟指令写：文生图4k 一只白猫；画幅把“图”写成“竖图/横图”：文生竖图2k 一只白猫；动图：文生动图 提示词。"
     )
 
 
